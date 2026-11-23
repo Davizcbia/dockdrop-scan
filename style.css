@@ -5,8 +5,21 @@ html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: h
   font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", sans-serif; }
 video, #fx { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 #fx { pointer-events: none; }
+/* Progressive blur: four layers, each blurring a little more and starting a little further out (masked by radial
+   gradients centred on the finder). Inside the circle (radius 36vmin) nothing is blurred. The decoder reads the raw
+   camera frames, so this is only for the eye. */
+.focus i { position: fixed; inset: 0; pointer-events: none; }
+.focus i:nth-child(1) { -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  -webkit-mask-image: radial-gradient(circle at 50% 46%, transparent 37vmin, #000 43vmin); mask-image: radial-gradient(circle at 50% 46%, transparent 37vmin, #000 43vmin); }
+.focus i:nth-child(2) { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  -webkit-mask-image: radial-gradient(circle at 50% 46%, transparent 41vmin, #000 52vmin); mask-image: radial-gradient(circle at 50% 46%, transparent 41vmin, #000 52vmin); }
+.focus i:nth-child(3) { -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  -webkit-mask-image: radial-gradient(circle at 50% 46%, transparent 48vmin, #000 66vmin); mask-image: radial-gradient(circle at 50% 46%, transparent 48vmin, #000 66vmin); }
+.focus i:nth-child(4) { -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px);
+  -webkit-mask-image: radial-gradient(circle at 50% 46%, transparent 58vmin, #000 90vmin); mask-image: radial-gradient(circle at 50% 46%, transparent 58vmin, #000 90vmin); }
+@media (prefers-reduced-transparency: reduce) { .focus { display: none; } }
 .vignette { position: fixed; inset: 0; pointer-events: none;
-  background: radial-gradient(circle at 50% 46%, transparent 0 34vmin, rgba(0,0,0,0.55) 52vmin, rgba(0,0,0,0.85) 100%); }
+  background: radial-gradient(circle at 50% 46%, transparent 0 36vmin, rgba(0,0,0,0.35) 50vmin, rgba(0,0,0,0.72) 100%); }
 
 .glass { background: var(--glass); -webkit-backdrop-filter: blur(28px) saturate(170%); backdrop-filter: blur(28px) saturate(170%);
   border-radius: 28px; box-shadow: inset 0 0.5px 0 0 var(--edge), inset 0 0 0 0.5px rgba(255,255,255,0.08), 0 12px 40px rgba(0,0,0,0.35); }
@@ -18,8 +31,8 @@ video, #fx { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: c
 .sub { font-size: 13px; letter-spacing: 0.01em; color: rgba(255,255,255,0.78); transition: color .2s; }
 
 .finder { position: fixed; left: 50%; top: 46%; width: 72vmin; height: 72vmin; transform: translate(-50%, -50%); pointer-events: none; }
-.finder .ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.55);
-  box-shadow: 0 0 24px rgba(80,150,255,0.35), inset 0 0 24px rgba(80,150,255,0.18); transition: transform .35s cubic-bezier(.2,.8,.2,1), border-color .3s; }
+.finder .ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.6);
+  box-shadow: 0 0 30px rgba(80,150,255,0.40), 0 0 2px rgba(255,255,255,0.5), inset 0 0 30px rgba(80,150,255,0.14); transition: transform .35s cubic-bezier(.2,.8,.2,1), border-color .3s; }
 .finder.locked .ring { border-color: rgba(120,190,255,0.95); transform: scale(0.96); }
 .finder.hidden { opacity: 0; transition: opacity .4s; }
 

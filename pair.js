@@ -61,26 +61,32 @@ export async function pair(opts) {
     ws.onopen = () => onStatus(role === 'guest' ? '正在等待电脑回应…' : '正在等待手机…');
     const authenticate = (ch) => {
       channel = ch;
-      ch.onopen = async () => {
+      // The peer's auth can arrive while this side is still computing its own (the HMAC is async): listen from the
+      // start and keep it, or it is lost and this side waits for ever while the peer reports success.
+      let peerAuth = null, gotAuth;
+      const authArrived = new Promise((r) => { gotAuth = r; });
+      ch.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch { return fail(new Error('bad message')); }
+        if (m.t === 'auth' && !peerAuth) { peerAuth = m; gotAuth(m); }
+      };
+      const onOpen = async () => {
         onStatus('正在验证…');
         const local = fingerprint(pc.localDescription && pc.localDescription.sdp);
         const remote = fingerprint(pc.remoteDescription && pc.remoteDescription.sdp);
         if (!local || !remote) return fail(new Error('no DTLS fingerprint'));
         const mine = await hmac(secret, `dockdrop-auth-v1|${role}|${local}|${remote}`);
         ch.send(JSON.stringify({ t: 'auth', mac: mine, name, protocol: PROTOCOL }));
-        ch.onmessage = async (e) => {
-          let m; try { m = JSON.parse(e.data); } catch { return fail(new Error('bad message')); }
-          if (m.t !== 'auth') return;
-          const peerRole = role === 'host' ? 'guest' : 'host';
-          const expect = await hmac(secret, `dockdrop-auth-v1|${peerRole}|${remote}|${local}`);
-          if (m.mac !== expect) return fail(new Error('authentication failed'));
-          if (settled) return;
-          settled = true; timers.forEach(clearTimeout);
-          try { ws.close(); } catch {}
-          ch.onmessage = null;
-          resolve({ channel: ch, peerName: String(m.name || '').slice(0, 64), pc });
-        };
+        const m = await authArrived;
+        const peerRole = role === 'host' ? 'guest' : 'host';
+        const expect = await hmac(secret, `dockdrop-auth-v1|${peerRole}|${remote}|${local}`);
+        if (m.mac !== expect) return fail(new Error('authentication failed'));
+        if (settled) return;
+        settled = true; timers.forEach(clearTimeout);
+        try { ws.close(); } catch {}
+        ch.onmessage = null;
+        resolve({ channel: ch, peerName: String(m.name || '').slice(0, 64), pc });
       };
+      if (ch.readyState === 'open') onOpen(); else ch.onopen = onOpen;
       ch.onerror = () => fail(new Error('channel error'));
     };
     if (role === 'guest') authenticate(pc.createDataChannel('dockdrop', { ordered: true }));

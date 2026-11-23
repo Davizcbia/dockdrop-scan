@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>DockDrop 配对 · 光泡扫描</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+  .finder { width: 84vmin; height: 84vmin; }
+  .finder::before { display: none; }
+  .diag { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 76px); padding: 8px 12px; border-radius: 14px;
+    font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace; color: rgba(255,255,255,0.85); white-space: pre-wrap; max-width: 520px; margin: 0 auto; }
+  .result-text .metrics { display: block; margin-top: 8px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: rgba(255,255,255,0.6); white-space: pre-line; }
+</style>
+</head>
+<body>
+<video id="video" playsinline muted autoplay></video>
+<canvas id="fx"></canvas>
+<div class="vignette"></div>
+<div class="finder" id="finder"><div class="ring"></div></div>
+
+<button class="close glass" id="close" aria-label="关闭相机" hidden><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
+<header class="top glass">
+  <div class="title">DockDrop</div>
+  <div class="sub" id="hint">把光泡放进圆圈里</div>
+</header>
+<div class="diag glass" id="diag" hidden></div>
+
+<div class="start glass sheet show" id="start">
+  <div class="start-title">扫描电脑上的光泡</div>
+  <div class="start-text">在电脑上打开"添加设备"，对准屏幕上的光泡即可配对。画面只在手机上处理，不会上传。</div>
+  <button id="go" class="button">打开相机</button>
+</div>
+
+<div class="result glass sheet" id="result" hidden>
+  <div class="check"><svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M15 27 l8 8 l15 -17"/></svg></div>
+  <div class="result-title" id="resultTitle">已连接</div>
+  <div class="result-text" id="resultText"></div>
+  <button id="again" class="button">再扫一次</button>
+</div>
+
+<div class="status glass" id="status" hidden><span class="spinner" id="spinner"></span><span id="statusText"></span><button id="cancel" class="link" hidden>取消</button></div>
+<script type="module" src="scan.js"></script>
+</body>
+</html>

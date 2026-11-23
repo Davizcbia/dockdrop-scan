@@ -1,0 +1,8 @@
+{
+  "name": "DockDrop 配对",
+  "short_name": "DockDrop",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000"
+}

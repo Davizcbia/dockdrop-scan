@@ -1,0 +1,46 @@
+/* DockDrop scanner: full-screen camera, a round finder, Liquid Glass panels (backdrop blur + specular edge). */
+:root { color-scheme: dark; --blue: #2f7bff; --glass: rgba(28, 32, 44, 0.42); --edge: rgba(255, 255, 255, 0.22); }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden;
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", sans-serif; }
+video, #fx { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+#fx { pointer-events: none; }
+.vignette { position: fixed; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 50% 46%, transparent 0 34vmin, rgba(0,0,0,0.55) 52vmin, rgba(0,0,0,0.85) 100%); }
+
+.glass { background: var(--glass); -webkit-backdrop-filter: blur(28px) saturate(170%); backdrop-filter: blur(28px) saturate(170%);
+  border-radius: 28px; box-shadow: inset 0 0.5px 0 0 var(--edge), inset 0 0 0 0.5px rgba(255,255,255,0.08), 0 12px 40px rgba(0,0,0,0.35); }
+@supports (corner-shape: squircle) { .glass { corner-shape: squircle; border-radius: 44px; } }
+
+.top { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 14px);
+  padding: 10px 22px; text-align: center; min-width: 200px; }
+.title { font-weight: 600; font-size: 17px; letter-spacing: 0.2px; }
+.sub { font-size: 13px; opacity: 0.75; }
+
+.finder { position: fixed; left: 50%; top: 46%; width: 72vmin; height: 72vmin; transform: translate(-50%, -50%); pointer-events: none; }
+.finder .ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.55);
+  box-shadow: 0 0 24px rgba(80,150,255,0.35), inset 0 0 24px rgba(80,150,255,0.18); transition: transform .35s cubic-bezier(.2,.8,.2,1), border-color .3s; }
+.finder.locked .ring { border-color: rgba(120,190,255,0.95); transform: scale(0.96); }
+.finder.hidden { opacity: 0; transition: opacity .4s; }
+
+.start, .result { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 16px);
+  padding: 22px 22px 18px; text-align: center; max-width: 460px; margin: 0 auto; }
+.start-title, .result-title { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.start-text, .result-text { font-size: 14px; opacity: 0.8; margin-bottom: 16px; }
+.button { appearance: none; border: 0; width: 100%; height: 50px; border-radius: 25px; background: var(--blue); color: #fff;
+  font: inherit; font-weight: 600; font-size: 17px; }
+.button.secondary { background: rgba(255,255,255,0.14); }
+.button:active { transform: scale(0.98); }
+.file { display: block; margin-top: 12px; font-size: 13px; opacity: 0.7; }
+.file input { display: none; }
+
+.status { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 24px);
+  padding: 10px 18px; font-size: 14px; white-space: nowrap; }
+
+.check svg { width: 64px; height: 64px; margin: 4px auto 10px; display: block; }
+.check circle { fill: var(--blue); stroke: rgba(255,255,255,0.6); stroke-width: 1; }
+.check path { fill: none; stroke: #fff; stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 40; stroke-dashoffset: 40; animation: draw .45s .25s cubic-bezier(.3,.8,.3,1) forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { .check path { animation: none; stroke-dashoffset: 0; } }

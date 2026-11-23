@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DockDrop 配对 · 电脑端测试</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { background: radial-gradient(circle at 50% 30%, #12203f, #05070d 70%); }
+  .panel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(440px, 92vw); padding: 24px; text-align: center; }
+  input { width: 100%; height: 44px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff;
+    font: 16px ui-monospace, Consolas, monospace; text-align: center; margin: 10px 0 14px; }
+  #log { margin-top: 14px; font-size: 13px; opacity: 0.8; min-height: 1.4em; }
+</style>
+</head>
+<body>
+<!-- Test stand-in for the computer's side until DockOver runs it in WebView2: join the room of the secret that
+     docky-orb shows (its title bar, or --secret) as the host, then wait for the phone. -->
+<div class="panel glass">
+  <div class="start-title">电脑端（测试）</div>
+  <div class="start-text">输入 docky-orb 窗口标题里的配对码，然后用手机扫描光点。</div>
+  <input id="secret" placeholder="16 位配对码" maxlength="16" spellcheck="false">
+  <button id="go" class="button">等待手机</button>
+  <div id="log"></div>
+</div>
+<script type="module">
+  import { SIGNAL_URL } from './config.js';
+  import { pair } from './pair.js';
+  const q = new URLSearchParams(location.search);
+  const signal = q.get('signal') || SIGNAL_URL;
+  const log = (t) => { document.getElementById('log').textContent = t; };
+  if (q.get('secret')) document.getElementById('secret').value = q.get('secret');
+  async function go() {
+    const secret = document.getElementById('secret').value.trim().toLowerCase();
+    if (!/^[0-9a-f]{16}$/.test(secret)) return log('配对码是 16 位十六进制数');
+    if (!signal) return log('还没配置配对服务（config.js 的 SIGNAL_URL 或 ?signal=）');
+    try {
+      const res = await pair({ signalUrl: signal, secret, role: 'host', name: 'DockOver 电脑', onStatus: log, timeoutMs: 120000 });
+      log('已连接：' + (res.peerName || '手机'));
+      window.dockdropLink = res;
+      document.title = 'connected';
+    } catch (e) { log('失败：' + e.message); document.title = 'failed: ' + e.message; }
+  }
+  document.getElementById('go').onclick = go;
+  if (q.get('auto')) go();
+</script>
+</body>
+</html>

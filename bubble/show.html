@@ -3,18 +3,42 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Optical Bubble · 电脑端（Phase 1 扫描验证）</title>
+<title>DockDrop · 添加设备</title>
 <link rel="stylesheet" href="../style.css">
 <style>
   html, body { background: radial-gradient(circle at 50% 38%, #0d1626, #05070d 70%); overflow: auto; }
   main { min-height: 100%; display: grid; place-items: center; padding: 28px 16px; }
   .stage { display: flex; gap: 40px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  @media (max-width: 720px) { main { align-items: start; } }
   .bubble-wrap { position: relative; width: min(62vmin, 560px); aspect-ratio: 1; }
-  #bubble { width: 100%; height: 100%; display: block; transition: transform .7s cubic-bezier(.3,.9,.25,1), opacity .5s; }
-  .bubble-wrap.done #bubble { transform: scale(0.12); opacity: 0; }
-  .device { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transform: scale(0.6); transition: opacity .4s .35s, transform .6s .35s cubic-bezier(.3,1.4,.4,1); }
-  .bubble-wrap.done .device { opacity: 1; transform: none; }
-  .device svg { width: 84px; height: 84px; } .device path, .device rect { fill: none; stroke: #cfe3ff; stroke-width: 2; }
+  #bubble { width: 100%; height: 100%; display: block; }
+  .confirmation { position: absolute; inset: 12%; display: grid; place-items: center; border-radius: 50%; opacity: 0;
+    background: radial-gradient(ellipse at 66% 80%, #539eb244, transparent 55%),
+      radial-gradient(ellipse at 31% 22%, #88b5d95c, transparent 37%),
+      radial-gradient(circle at 45% 40%, #293d56, #101d30 72%, #496578 100%);
+    box-shadow: inset 0 1px 3px #d4f1ff99, inset 0 -3px 12px #72b9dc45, 0 16px 48px #0007;
+    pointer-events: none; }
+  .confirmation svg { width: 30%; height: 30%; }
+  .confirmation path { fill: none; stroke: #edfaff; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round;
+    stroke-dasharray: 1; stroke-dashoffset: 1; }
+  .ripple { position: absolute; inset: 10%; border-radius: 50%; opacity: 0; pointer-events: none;
+    box-shadow: inset 0 0 3px 2px #d6f4ff, 0 0 14px 3px #8dd8ff66; }
+  .done #bubble { opacity: 0; animation: clear-code .48s ease-out; }
+  .done .confirmation { opacity: 1; animation: reveal-glass .52s cubic-bezier(.22,.7,.24,1) both; }
+  .done .ripple { animation: travel .60s cubic-bezier(.2,.55,.3,1) both; }
+  .done .confirmation path { animation: draw-check .29s .25s ease-out both; }
+  @keyframes clear-code { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes reveal-glass { from { opacity: .1; clip-path: circle(0%); } to { opacity: 1; clip-path: circle(50%); } }
+  @keyframes travel {
+    0% { opacity: 0; transform: scale(.04); }
+    21% { opacity: .78; }
+    100% { opacity: 0; transform: scale(1.04); }
+  }
+  @keyframes draw-check { to { stroke-dashoffset: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .done #bubble, .done .confirmation, .done .ripple, .done .confirmation path { animation: none; }
+    .done .confirmation path { stroke-dashoffset: 0; }
+  }
   .side { width: 280px; padding: 20px; }
   .side h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; letter-spacing: -0.015em; }
   .side p { font-size: 13px; color: rgba(255,255,255,0.75); margin: 0 0 12px; }
@@ -26,22 +50,24 @@
 </style>
 </head>
 <body>
-<!-- Phase 1 test stand-in for DockOver's pairing window: a fresh one-time secret every 60 s (and after each pairing),
-     shown as the Bubble Code and, as a fallback, a QR code with the scanner URL; joins the secret's room as the host. -->
 <main>
   <div class="stage">
     <div class="bubble-wrap" id="wrap">
       <canvas id="bubble"></canvas>
-      <div class="device" aria-hidden="true"><svg viewBox="0 0 48 48"><rect x="14" y="4" width="20" height="40" rx="5"/><path d="M21 9h6"/></svg></div>
+      <div class="confirmation" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M10 25l9 9 19-20" pathLength="1"/></svg></div>
+      <div class="ripple" aria-hidden="true"></div>
     </div>
     <div class="side glass">
       <h1>添加设备</h1>
-      <p>用手机打开扫描页，对准左边的光泡。</p>
-      <p>扫不出来？用手机自带相机扫这个二维码：</p>
-      <canvas id="qr" aria-label="备用二维码"></canvas>
-      <div id="log">正在准备…</div>
-      <div class="bar"><i id="bar"></i></div>
-      <div class="meta" id="meta"></div>
+      <div id="guide">
+        <p>用手机打开扫描页，对准电脑上的光泡。</p>
+        <p>扫不出来？用手机自带相机扫这个二维码：</p>
+        <canvas id="qr" aria-label="备用二维码"></canvas>
+        <div class="bar"><i id="bar"></i></div>
+        <div class="meta" id="meta"></div>
+      </div>
+      <div id="log" role="status">正在准备…</div>
+      <button class="button" id="next" hidden>再添加一台设备</button>
     </div>
   </div>
 </main>
@@ -87,12 +113,24 @@
     return { url, code };
   }
 
-  // One code's life: shown, waited on as the host, replaced after LIFETIME s or once a phone has paired.
+  function showConnected(peerName) {
+    $('wrap').classList.add('done');
+    $('guide').hidden = true;
+    log(`已连接：${peerName || '手机'}`);
+    const next = $('next');
+    next.hidden = false;
+    return new Promise((resolve) => next.addEventListener('click', resolve, { once: true }));
+  }
+
+  // Refresh an expired code, or issue a new one when the user adds another device.
   async function cycle() {
     const secret = newSecret();
     const ctl = new AbortController();
-    current = { secret, ctl, born: performance.now() };
+    current = { secret };
     $('wrap').classList.remove('done');
+    $('guide').hidden = false;
+    $('next').hidden = true;
+    document.title = 'DockDrop · 添加设备';
     const ms = drawBubble(secret);
     const fb = drawFallback(secret);
     $('meta').textContent = `code …${secret.slice(-4)} · 渲染 ${ms.toFixed(0)} ms\nQR v${fb.code.version} · ${fb.url.length} 字符\n已配对 ${count} 次`;
@@ -106,12 +144,10 @@
                                onStatus: (t) => log(t), timeoutMs: LIFETIME * 1000 + 30000, peerWaitMs: 0 });
       clearTimeout(expire);
       count++;
-      const dt = ((performance.now() - current.born) / 1000).toFixed(1);
-      log(`已连接：${res.peerName || '手机'}（码显示 ${dt} s 后）`);
-      document.title = 'connected ' + count;
+      current = null;
+      document.title = 'DockDrop · 已连接';
       window.dockdropLink = res;
-      $('wrap').classList.add('done');  // Phase 4 preview: the bubble gives way to the device
-      await new Promise((r) => setTimeout(r, 2600));
+      await showConnected(res.peerName);
     } catch (e) {
       clearTimeout(expire);
       if (e.message !== 'cancelled') { log('这次没连上（' + e.message + '），换一个新码'); await new Promise((r) => setTimeout(r, 1500)); }

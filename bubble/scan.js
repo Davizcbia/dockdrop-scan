@@ -3,11 +3,13 @@
 // this page with #s=<secret>, and it pairs straight away.
 import { SIGNAL_URL as CONFIG_SIGNAL } from '../config.js';
 import { pair } from '../pair.js';
+import { startCameraGlass } from './glass.js?v=glass1';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const SIGNAL_URL = params.get('signal') || CONFIG_SIGNAL;
-const video = $('video'), fx = $('fx'), finder = $('finder');
+const video = $('video'), focus = $('focus');
+const ALIGN_HINT = '将光泡对准画面中央';
 const worker = new Worker(new URL('./worker.js?v=r3', import.meta.url), { type: 'module' });
 const grab = document.createElement('canvas');
 const gctx = grab.getContext('2d', { willReadFrequently: true });
@@ -20,6 +22,7 @@ const MODE = params.get('mode') === 'rays' ? 'rays' : 'v1';
 const NOPAIR = params.get('nopair') === '1';
 
 let stream = null, scanning = false, busy = false, frameId = 0, pairing = null;
+let glassFrame, stopGlass;
 // statistics for this camera session
 let st = null;
 const newStats = () => ({ t0: performance.now(), firstFrame: 0, frames: 0, decoded: 0, found: 0, ok: 0, msSum: 0, last: null, zoom: 1, reads: [], fpsT: performance.now(), fpsN: 0, fps: 0, camFps: 0, res: '' });
@@ -38,15 +41,13 @@ function hideSheet(el) {
   return new Promise((r) => setTimeout(() => { el.hidden = true; r(); }, reducedMotion ? 200 : 320));
 }
 
-// The part of the camera picture to decode: the finder's square (84 vmin round 50 % / 46 % of the screen), through the
-// video's object-fit: cover. zoom 2 takes the middle half of it at twice the resolution (a bubble far away).
-let cropScreen = null;
+// Crop around the center of the clear preview, accounting for object-fit: cover.
+// Zoom 2 takes the middle half at twice the resolution for distant targets.
 function crop(zoom) {
   const vw = video.videoWidth, vh = video.videoHeight, W = innerWidth, H = innerHeight;
   const scale = Math.max(W / vw, H / vh), ox = (W - vw * scale) / 2, oy = (H - vh * scale) / 2;
   const sidePx = Math.min(W, H) * 0.92 / zoom, side = sidePx / scale;
   const cx = (W / 2 - ox) / scale, cy = (H * 0.46 - oy) / scale;
-  cropScreen = { left: W / 2 - sidePx / 2, top: H * 0.46 - sidePx / 2, side: sidePx };
   return { x: cx - side / 2, y: cy - side / 2, side };
 }
 function grabFrame(zoom) {
@@ -56,7 +57,7 @@ function grabFrame(zoom) {
   gctx.drawImage(video, c.x, c.y, c.side, c.side, 0, 0, SIZE, SIZE);
   const d = gctx.getImageData(0, 0, SIZE, SIZE).data, gray = new Float32Array(SIZE * SIZE);
   for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = Math.max(d[j], d[j + 1], d[j + 2]) / 255;
-  return { gray, screen: { ...cropScreen } };
+  return gray;
 }
 function decode(gray) {
   return new Promise((resolve) => {
@@ -77,21 +78,6 @@ function accept(r) {
   const again = st.reads.some((x) => x.secret === r.secret);
   st.reads.push({ secret: r.secret, t: now });
   return again;
-}
-
-function drawOverlay(r, screen) {
-  const dpr = window.devicePixelRatio || 1;
-  if (fx.width !== innerWidth * dpr) { fx.width = innerWidth * dpr; fx.height = innerHeight * dpr; }
-  const ctx = fx.getContext('2d');
-  ctx.clearRect(0, 0, fx.width, fx.height);
-  if (!DEBUG || !r || !r.ellipse) return;
-  const k = screen.side / SIZE * dpr, e = r.ellipse;
-  ctx.save();
-  ctx.translate((screen.left + e.cx * screen.side / SIZE) * dpr, (screen.top + e.cy * screen.side / SIZE) * dpr);
-  ctx.rotate(e.theta);
-  ctx.strokeStyle = r.ok ? 'rgba(120,255,170,0.9)' : 'rgba(255,200,90,0.8)'; ctx.lineWidth = 2 * dpr;
-  ctx.beginPath(); ctx.ellipse(0, 0, e.a * k, e.b * k, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.restore();
 }
 
 function showDiag() {
@@ -132,7 +118,7 @@ function loop() {
       let zoom = st.last && st.last.ellipse ? (st.last.ellipse.a < 34 && st.zoom === 1 ? 2 : st.last.ellipse.a > 170 && st.zoom === 2 ? 1 : st.zoom) : (st.frames % 2 ? 2 : 1);
       if (MODE === 'rays') zoom = 1;  // the frames are added up: always the same crop
       st.zoom = zoom; st.frames++;
-      const { gray, screen } = grabFrame(zoom);
+      const gray = grabFrame(zoom);
       decode(gray).then((r) => {
         busy = false;
         if (!scanning) return;
@@ -141,9 +127,7 @@ function loop() {
         if (now - st.fpsT > 1000) { st.fps = st.fpsN * 1000 / (now - st.fpsT); st.fpsN = 0; st.fpsT = now; }
         if (r.ellipse) st.found++;
         st.last = r;
-        drawOverlay(r, screen);
-        finder.classList.toggle('locked', !!r.ellipse);
-        hint(r.ellipse ? '找到光泡，保持不动' : '把光泡放进圆圈里');
+        hint(r.ellipse ? '找到光泡，保持不动' : ALIGN_HINT);
         if (r.ok) { st.ok++; if (accept(r)) { found({ ...r, via: 'bubble' }); return; } }
         showDiag();
       });
@@ -166,15 +150,29 @@ async function startCamera() {
   status('');
   await hideSheet($('start'));
   $('close').hidden = false;
-  finder.classList.remove('hidden', 'locked');
-  hint('把光泡放进圆圈里');
+  hint(ALIGN_HINT);
   st = newStats();
   worker.postMessage({ reset: true });
   const s = stream.getVideoTracks()[0].getSettings ? stream.getVideoTracks()[0].getSettings() : {};
   st.res = `${s.width || video.videoWidth}x${s.height || video.videoHeight}`; st.camFps = s.frameRate || 0;
+  focus.hidden = false;
   scanning = true; requestAnimationFrame(loop);
+  glassFrame = requestAnimationFrame(() => {
+    if (scanning) stopGlass = startCameraGlass(video, [$('close'), document.querySelector('.top.scan-control')]);
+  });
 }
-function stopCamera() { scanning = false; if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; } video.srcObject = null; drawOverlay(null); }
+function stopCamera() {
+  scanning = false;
+  cancelAnimationFrame(glassFrame);
+  stopGlass?.();
+  stopGlass = null;
+  focus.hidden = true;
+  if (stream) {
+    stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+  }
+  video.srcObject = null;
+}
 
 async function backToStart() {
   if (pairing) { pairing.abort(); pairing = null; }
@@ -182,8 +180,7 @@ async function backToStart() {
   status(''); $('diag').hidden = true;
   $('close').hidden = true;
   await hideSheet($('result'));
-  finder.classList.remove('hidden', 'locked');
-  hint('把光泡放进圆圈里');
+  hint(ALIGN_HINT);
   showSheet($('start'));
 }
 
@@ -200,7 +197,7 @@ async function found(r) {
   const scanT = st ? (performance.now() - (st.firstFrame || st.t0)) / 1000 : 0;
   const metrics = st ? `识别：${r.via === 'qr' ? '二维码' : '光泡'} · 第一帧后 ${scanT.toFixed(2)} s · 解码 ${st.decoded} 帧 · 平均 ${(st.msSum / Math.max(1, st.decoded)).toFixed(0)} ms` + (r.corrected ? ` · 纠正 ${r.corrected} 字节` : '') : '识别：备用二维码（相机应用）';
   if (navigator.vibrate) navigator.vibrate(20);
-  finder.classList.add('hidden'); $('diag').hidden = true;
+  $('diag').hidden = true;
   hint('已识别');
   stopCamera();
   if (!SIGNAL_URL || NOPAIR) { showResult('已识别光泡', `配对码 …${r.secret.slice(-4)}（配对服务未配置，只测试了扫描）`, false, metrics); return; }
@@ -229,7 +226,6 @@ function showResult(title, text, failed = false, metrics = '') {
   if (metrics) { const m = document.createElement('span'); m.className = 'metrics'; m.textContent = metrics; $('resultText').appendChild(m); }
   const check = $('result').querySelector('.check');
   check.hidden = failed;
-  finder.classList.add('hidden');
   const path = check.querySelector('path'); path.style.animation = 'none'; void path.getBoundingClientRect(); path.style.animation = '';
   showSheet($('result'));
 }

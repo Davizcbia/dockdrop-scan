@@ -36,10 +36,12 @@ async function hmac(secretHex, text) {
   return hex(await crypto.subtle.sign('HMAC', key, enc.encode(text)));
 }
 
-// opts: { signalUrl, secret (hex), role: 'host' | 'guest', name, onStatus(text), timeoutMs }
-// Resolves { channel, peerName } once authenticated; rejects on failure.
+// opts: { signalUrl, secret (hex), role: 'host' | 'guest', name, onStatus(text), timeoutMs, peerWaitMs, signal }
+// Resolves { channel, peerName } once authenticated; rejects on failure with Error.message one of:
+//   'no peer' (nobody on the other side within peerWaitMs: the computer's pairing window is closed or its code changed),
+//   'timeout', 'signalling unreachable', 'authentication failed', 'cancelled', 'room busy', or a WebRTC error.
 export async function pair(opts) {
-  const { signalUrl, secret, role, name = 'DockOver', onStatus = () => {}, timeoutMs = 30000 } = opts;
+  const { signalUrl, secret, role, name = 'DockOver', onStatus = () => {}, timeoutMs = 30000, peerWaitMs = 12000, signal } = opts;
   const room = await roomFor(secret);
   const url = signalUrl.replace(/\/$/, '') + '/room/' + room + '?role=' + role;
   onStatus('正在连接配对服务…');
@@ -50,8 +52,13 @@ export async function pair(opts) {
   let channel = null;
 
   const done = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
-    const fail = (err) => { clearTimeout(timer); try { pc.close(); ws.close(); } catch {} reject(err); };
+    let settled = false, peerSeen = false;
+    const timers = [];
+    const fail = (err) => { if (settled) return; settled = true; timers.forEach(clearTimeout); try { pc.close(); ws.close(); } catch {} reject(err); };
+    timers.push(setTimeout(() => fail(new Error('timeout')), timeoutMs));
+    if (peerWaitMs > 0) timers.push(setTimeout(() => { if (!peerSeen) fail(new Error('no peer')); }, peerWaitMs));
+    if (signal) { if (signal.aborted) return fail(new Error('cancelled')); signal.addEventListener('abort', () => fail(new Error('cancelled'))); }
+    ws.onopen = () => onStatus(role === 'guest' ? '正在等待电脑回应…' : '正在等待手机…');
     const authenticate = (ch) => {
       channel = ch;
       ch.onopen = async () => {
@@ -67,7 +74,8 @@ export async function pair(opts) {
           const peerRole = role === 'host' ? 'guest' : 'host';
           const expect = await hmac(secret, `dockdrop-auth-v1|${peerRole}|${remote}|${local}`);
           if (m.mac !== expect) return fail(new Error('authentication failed'));
-          clearTimeout(timer);
+          if (settled) return;
+          settled = true; timers.forEach(clearTimeout);
           try { ws.close(); } catch {}
           ch.onmessage = null;
           resolve({ channel: ch, peerName: String(m.name || '').slice(0, 64), pc });
@@ -79,10 +87,12 @@ export async function pair(opts) {
     else pc.ondatachannel = (e) => authenticate(e.channel);
 
     ws.onerror = () => fail(new Error('signalling unreachable'));
-    ws.onclose = (e) => { if (!channel || channel.readyState !== 'open') if (e.code === 4409) fail(new Error('room busy')); };
+    // The relay closes a room after 2 minutes: whoever is still waiting then fails instead of hanging (and retries).
+    ws.onclose = (e) => { if (!channel || channel.readyState !== 'open') fail(new Error(e.code === 4409 ? 'room busy' : e.code === 4408 ? 'timeout' : 'signalling unreachable')); };
     ws.onmessage = async (e) => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
       try {
+        if (m.t === 'peer') peerSeen = true;
         if (m.t === 'peer' && role === 'guest') {  // the host is there: offer
           onStatus('正在建立直连…');
           await pc.setLocalDescription(await pc.createOffer());

@@ -10,13 +10,33 @@ const worker = new Worker(new URL('./scan-worker.js', import.meta.url), { type: 
 const grab = document.createElement('canvas');
 const gctx = grab.getContext('2d', { willReadFrequently: true });
 const SIZE = 360;  // decoded square (px): the finder's area of the camera picture
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-let stream = null, busy = false, frameId = 0, found = null, lastGeom = null, scanning = false;
+let stream = null, busy = false, frameId = 0, scanning = false, prevGeom = null, cropRect = null, pairing = null;
 
-function status(text) { const s = $('status'); s.textContent = text; s.hidden = !text; }
+// ---- status pill: what is happening, a spinner while waiting, and a way out ------------------------------------------
+function status(text, { spin = false, cancel = false } = {}) {
+  $('statusText').textContent = text || '';
+  $('spinner').hidden = !spin;
+  $('cancel').hidden = !cancel;
+  $('status').hidden = !text;
+}
+function hint(text) { $('hint').textContent = text; }
+
+// ---- sheets: rise in from the bottom, leave the same way ---------------------------------------------------------------
+function showSheet(el) {
+  el.hidden = false;
+  void el.getBoundingClientRect();  // commit the hidden pose, then transition to shown (no rAF: works in a background tab)
+  setTimeout(() => el.classList.add('show'), 16);
+}
+function hideSheet(el) {
+  if (el.hidden) return Promise.resolve();
+  el.classList.remove('show');
+  return new Promise((r) => setTimeout(() => { el.hidden = true; r(); }, reducedMotion ? 200 : 320));
+}
 
 // The decoder gets the camera pixels under the finder circle (72 vmin wide, centred at 50 % / 46 % of the screen),
-// mapped through the video's object-fit: cover.
+// mapped through the video's object-fit: cover. Also remembers where that square is on screen (for the animation).
 function finderCrop(vw, vh) {
   const W = innerWidth, H = innerHeight;
   const scale = Math.max(W / vw, H / vh);              // screen px per video px
@@ -24,17 +44,22 @@ function finderCrop(vw, vh) {
   const sidePx = Math.min(W, H) * 0.72 * 1.12;         // a little margin round the finder
   const side = sidePx / scale;
   const cx = (W / 2 - ox) / scale, cy = (H * 0.46 - oy) / scale;
+  cropRect = { left: W / 2 - sidePx / 2, top: H * 0.46 - sidePx / 2, side: sidePx };
   return { x: cx - side / 2, y: cy - side / 2, side };
 }
 
-function grabFrame(source, sw, sh) {
-  const c = finderCrop(sw, sh);
-  grab.width = SIZE; grab.height = SIZE;
-  gctx.drawImage(source, c.x, c.y, c.side, c.side, 0, 0, SIZE, SIZE);
+function toGray() {
   const d = gctx.getImageData(0, 0, SIZE, SIZE).data;
   const gray = new Float32Array(SIZE * SIZE);
   for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = Math.max(d[j], d[j + 1], d[j + 2]) / 255;
   return gray;
+}
+
+function grabFrame() {
+  const c = finderCrop(video.videoWidth, video.videoHeight);
+  grab.width = SIZE; grab.height = SIZE;
+  gctx.drawImage(video, c.x, c.y, c.side, c.side, 0, 0, SIZE, SIZE);
+  return toGray();
 }
 
 function decode(gray) {
@@ -46,42 +71,69 @@ function decode(gray) {
   });
 }
 
+// An orb is "in view" when two frames in a row find it in about the same place: the finder tightens and says so.
+function steady(r) {
+  const ok = r.radius > 12 && prevGeom && Math.hypot(r.cx - prevGeom.cx, r.cy - prevGeom.cy) < r.radius * 0.15 && Math.abs(r.radius - prevGeom.radius) < r.radius * 0.12;
+  prevGeom = r.radius > 12 ? r : null;
+  return ok;
+}
+
 async function loop() {
   if (!scanning) return;
   if (!busy && video.readyState >= 2) {
     busy = true;
-    const r = await decode(grabFrame(video, video.videoWidth, video.videoHeight));
+    const r = await decode(grabFrame());
     busy = false;
-    lastGeom = r.radius > 0 ? r : null;
-    finder.classList.toggle('locked', !!lastGeom);
-    if (r.ok && scanning) return onFound(r);
+    if (!scanning) return;
+    if (r.ok) return onFound(r);
+    const lock = steady(r);
+    finder.classList.toggle('locked', lock);
+    hint(lock ? '找到光点，保持不动' : '把光点放进圆圈里');
   }
   requestAnimationFrame(loop);
 }
 
 async function startCamera() {
-  if (!window.isSecureContext || !navigator.mediaDevices) {
-    status('相机需要 HTTPS 页面'); return;
-  }
+  if (!window.isSecureContext || !navigator.mediaDevices) { status('相机需要 HTTPS 页面'); return; }
+  status('正在打开相机…', { spin: true });
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
   } catch (e) {
-    status('无法打开相机：' + (e.name === 'NotAllowedError' ? '请在设置里允许使用相机' : e.message)); return;
+    status(e.name === 'NotAllowedError' ? '没有相机权限：请在浏览器设置里允许本网站使用相机' : '无法打开相机：' + e.message);
+    return;
   }
   video.srcObject = stream;
   await video.play().catch(() => {});
-  $('start').hidden = true; status('');
+  status('');
+  await hideSheet($('start'));
+  $('close').hidden = false;
+  finder.classList.remove('hidden', 'locked');
+  hint('把光点放进圆圈里');
+  prevGeom = null;
   scanning = true; requestAnimationFrame(loop);
 }
 
-function stopCamera() { scanning = false; if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; } }
+function stopCamera() { scanning = false; if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; } video.srcObject = null; }
 
-// ---- success: the finder's light gathers into the middle and is drawn in (the orb's own animation, mirrored) --------
-function absorb() {
+// Close (camera mode) and Cancel (while connecting): always a way back to the start.
+async function backToStart() {
+  if (pairing) { pairing.abort(); pairing = null; }
+  stopCamera();
+  status('');
+  $('close').hidden = true;
+  await hideSheet($('result'));
+  finder.classList.remove('hidden', 'locked');
+  hint('把光点放进圆圈里');
+  showSheet($('start'));
+}
+
+// ---- success: the orb's light gathers where the orb is and is drawn in (the computer's animation, mirrored) ----------
+function absorb(at) {
   const ctx = fx.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   fx.width = innerWidth * dpr; fx.height = innerHeight * dpr;
-  const cx = fx.width / 2, cy = fx.height * 0.46, R = Math.min(fx.width, fx.height) * 0.36;
+  if (reducedMotion) return new Promise((r) => setTimeout(r, 150));
+  const cx = at.x * dpr, cy = at.y * dpr, R = Math.max(at.r * dpr * 1.6, 40 * dpr);
   const n = 900, parts = [];
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2, r = R * (0.55 + 0.5 * Math.random());
@@ -89,7 +141,12 @@ function absorb() {
   }
   const t0 = performance.now();
   return new Promise((resolve) => {
+    // rAF does not run in a hidden tab: never let the animation hold up pairing
+    let finished = false;
+    const finish = () => { if (!finished) { finished = true; ctx.clearRect(0, 0, fx.width, fx.height); resolve(); } };
+    setTimeout(finish, 1500);
     const step = (now) => {
+      if (finished) return;
       const t = (now - t0) / 1000;
       ctx.clearRect(0, 0, fx.width, fx.height);
       ctx.globalCompositeOperation = 'lighter';
@@ -102,70 +159,97 @@ function absorb() {
       }
       const flash = Math.exp(-Math.pow((t - 1.0) / 0.1, 2));
       if (flash > 0.01) {
-        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.9);
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.2);
         g.addColorStop(0, `rgba(170,220,255,${flash})`); g.addColorStop(1, 'rgba(170,220,255,0)');
         ctx.fillStyle = g; ctx.fillRect(0, 0, fx.width, fx.height);
       }
-      if (t < 1.3) requestAnimationFrame(step); else { ctx.clearRect(0, 0, fx.width, fx.height); resolve(); }
+      if (t < 1.3) requestAnimationFrame(step); else finish();
     };
     requestAnimationFrame(step);
   });
 }
 
+const ERRORS = {
+  'no peer': ['电脑没有回应', '请确认电脑上的配对窗口还开着。光点每分钟会换一次，如果刚刚换过，请重新扫描。'],
+  'timeout': ['连接超时', '请确认手机和电脑连着同一个网络，然后再试一次。'],
+  'signalling unreachable': ['连不上配对服务', '请检查手机的网络连接，然后再试一次。'],
+  'authentication failed': ['验证没有通过', '请重新扫描电脑上当前显示的光点。'],
+  'room busy': ['这个光点正在和别的设备配对', '请等一下，或在电脑上换一个新的光点。'],
+};
+
 async function onFound(r) {
   scanning = false;
-  found = r;
-  if (navigator.vibrate) navigator.vibrate(30);
+  // the orb's place on screen: the decoder's position inside the finder square (or the middle for a test image)
+  const crop = cropRect || { left: innerWidth / 2 - 180, top: innerHeight * 0.46 - 180, side: 360 };
+  const at = { x: crop.left + r.cx / SIZE * crop.side, y: crop.top + r.cy / SIZE * crop.side, r: r.radius / SIZE * crop.side };
+  status('');
+  if (navigator.vibrate) navigator.vibrate(20);  // the same frame the animation starts (cause and feedback together)
   finder.classList.add('hidden');
-  $('hint').textContent = '已识别';
-  await absorb();
+  hint('已识别');
+  await absorb(at);
   stopCamera();
   if (!SIGNAL_URL) {
+    $('close').hidden = true;
     showResult('已识别光点', `配对码 ${r.secret.slice(0, 4)}…${r.secret.slice(-4)}（配对服务还没配置，只测试了扫描）`);
     return;
   }
+  const ctl = new AbortController(); pairing = ctl;
   try {
     const name = /iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android 手机' : '浏览器';
-    const res = await pair({ signalUrl: SIGNAL_URL, secret: r.secret, role: 'guest', name, onStatus: status });
+    status('正在连接…', { spin: true, cancel: true });
+    const res = await pair({ signalUrl: SIGNAL_URL, secret: r.secret, role: 'guest', name, signal: ctl.signal,
+                             onStatus: (t) => status(t, { spin: true, cancel: true }) });
+    pairing = null;
     status('');
+    $('close').hidden = true;
+    if (navigator.vibrate) navigator.vibrate([12, 60, 12]);
     showResult('已连接', `已和 ${res.peerName || '电脑'} 配对。`);
     window.dockdropLink = res;  // next: device keys, DockDrop, clipboard
   } catch (e) {
+    pairing = null;
+    if (e.message === 'cancelled') return;
     status('');
-    showResult('没能连接', e.message === 'authentication failed' ? '验证失败：请重新扫描电脑上当前显示的光点。' : '请确认手机和电脑连着同一个网络，然后再试一次。（' + e.message + '）', true);
+    $('close').hidden = true;
+    const [title, text] = ERRORS[e.message] || ['没能连接', '请确认手机和电脑连着同一个网络，然后再试一次。（' + e.message + '）'];
+    showResult(title, text, true);
   }
 }
 
 function showResult(title, text, failed = false) {
   $('resultTitle').textContent = title; $('resultText').textContent = text;
-  $('result').querySelector('.check').hidden = failed;
-  $('result').hidden = false;
+  const check = $('result').querySelector('.check');
+  check.hidden = failed;
+  finder.classList.add('hidden');
+  // restart the checkmark's stroke animation each time
+  const path = check.querySelector('path'); path.style.animation = 'none'; void path.getBoundingClientRect(); path.style.animation = '';
+  showSheet($('result'));
 }
 
 $('go').onclick = startCamera;
-$('again').onclick = () => { $('result').hidden = true; finder.classList.remove('hidden', 'locked'); $('hint').textContent = '把光点放进圆圈里'; startCamera(); };
+$('close').onclick = backToStart;
+$('cancel').onclick = backToStart;
+$('again').onclick = async () => { await hideSheet($('result')); startCamera(); };
 
 // Test without a camera: a screenshot of the orb (also ?image=<url>).
 async function testImage(img) {
-  $('start').hidden = true; status('正在识别图片…');
+  await hideSheet($('start'));
+  status('正在识别图片…', { spin: true });
   const c = document.createElement('canvas');
-  // center the picture in a square so the finder crop sees all of it
-  const side = Math.max(img.naturalWidth, img.naturalHeight);
+  const side = Math.max(img.naturalWidth, img.naturalHeight);  // centred in a square, as the finder would see it
   c.width = side; c.height = side;
   const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, side, side);
   x.drawImage(img, (side - img.naturalWidth) / 2, (side - img.naturalHeight) / 2);
   grab.width = SIZE; grab.height = SIZE;
   gctx.drawImage(c, 0, 0, side, side, 0, 0, SIZE, SIZE);
-  const d = gctx.getImageData(0, 0, SIZE, SIZE).data;
-  const gray = new Float32Array(SIZE * SIZE);
-  for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = Math.max(d[j], d[j + 1], d[j + 2]) / 255;
-  const r = await decode(gray);
+  cropRect = null;
+  const r = await decode(toGray());
   window.lastScan = r;
   if (r.ok) onFound(r); else { status(''); showResult('没有找到光点', '这张图里没有识别出配对光点。', true); }
 }
 $('file').onchange = (e) => {
   const f = e.target.files[0]; if (!f) return;
   const img = new Image(); img.onload = () => testImage(img); img.src = URL.createObjectURL(f);
+  e.target.value = '';
 };
 const q = new URLSearchParams(location.search).get('image');
 if (q) { const img = new Image(); img.onload = () => testImage(img); img.src = q; }

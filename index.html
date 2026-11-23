@@ -17,26 +17,27 @@
 <div class="vignette"></div>
 <div class="finder" id="finder"><div class="ring"></div></div>
 
+<button class="close glass" id="close" aria-label="关闭相机" hidden><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
 <header class="top glass">
   <div class="title">DockDrop</div>
   <div class="sub" id="hint">把光点放进圆圈里</div>
 </header>
 
-<div class="start glass" id="start">
+<div class="start glass sheet show" id="start">
   <div class="start-title">扫描电脑上的光点</div>
   <div class="start-text">在电脑上打开 DockOver 的"添加设备"，会出现一团蓝色光点。用这个页面对准它，就能配对。画面只在手机上处理，不会上传。</div>
   <button id="go" class="button">打开相机</button>
   <label class="file">或选一张截图测试<input id="file" type="file" accept="image/*"></label>
 </div>
 
-<div class="result glass" id="result" hidden>
+<div class="result glass sheet" id="result" hidden>
   <div class="check"><svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M15 27 l8 8 l15 -17"/></svg></div>
   <div class="result-title" id="resultTitle">已连接</div>
   <div class="result-text" id="resultText"></div>
-  <button id="again" class="button secondary">再扫一次</button>
+  <button id="again" class="button">再扫一次</button>
 </div>
 
-<div class="status glass" id="status" hidden></div>
+<div class="status glass" id="status" hidden><span class="spinner" id="spinner"></span><span id="statusText"></span><button id="cancel" class="link" hidden>取消</button></div>
 <script type="module" src="scan.js"></script>
 </body>
 </html>

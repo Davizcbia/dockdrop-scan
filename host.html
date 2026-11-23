@@ -30,16 +30,28 @@
   const signal = q.get('signal') || SIGNAL_URL;
   const log = (t) => { document.getElementById('log').textContent = t; };
   if (q.get('secret')) document.getElementById('secret').value = q.get('secret');
+  // Keeps answering: after each pairing (or a phone that gave up) it waits for the next scan, as the real computer
+  // side will while its pairing window is open.
+  let running = false, count = 0;
   async function go() {
     const secret = document.getElementById('secret').value.trim().toLowerCase();
     if (!/^[0-9a-f]{16}$/.test(secret)) return log('配对码是 16 位十六进制数');
     if (!signal) return log('还没配置配对服务（config.js 的 SIGNAL_URL 或 ?signal=）');
-    try {
-      const res = await pair({ signalUrl: signal, secret, role: 'host', name: 'DockOver 电脑', onStatus: log, timeoutMs: 120000 });
-      log('已连接：' + (res.peerName || '手机'));
-      window.dockdropLink = res;
-      document.title = 'connected';
-    } catch (e) { log('失败：' + e.message); document.title = 'failed: ' + e.message; }
+    if (running) return;
+    running = true;
+    while (running) {
+      try {
+        const res = await pair({ signalUrl: signal, secret, role: 'host', name: 'DockOver 电脑', onStatus: (t) => log((count ? `已配对 ${count} 次 · ` : '') + t), timeoutMs: 600000, peerWaitMs: 0 });
+        count++;
+        log(`已连接：${res.peerName || '手机'}（第 ${count} 次）`);
+        window.dockdropLink = res;
+        document.title = 'connected ' + count;
+        await new Promise((r) => setTimeout(r, 1500));
+      } catch (e) {
+        log('这次没连上（' + e.message + '），继续等待…');
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
   }
   document.getElementById('go').onclick = go;
   if (q.get('auto')) go();

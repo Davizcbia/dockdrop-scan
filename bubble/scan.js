@@ -8,7 +8,7 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const SIGNAL_URL = params.get('signal') || CONFIG_SIGNAL;
 const video = $('video'), fx = $('fx'), finder = $('finder');
-const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+const worker = new Worker(new URL('./worker.js?v=r3', import.meta.url), { type: 'module' });
 const grab = document.createElement('canvas');
 const gctx = grab.getContext('2d', { willReadFrequently: true });
 const SIZE = 400;  // decoded square (px)
@@ -99,9 +99,9 @@ function showDiag() {
   const now = performance.now(), l = st.last;
   $('diag').hidden = false;
   $('diag').textContent =
-    `相机 ${st.res} @ ${st.camFps ? st.camFps.toFixed(0) : '?'} fps · 解码 ${st.fps.toFixed(1)} 帧/s · 平均 ${(st.msSum / Math.max(1, st.decoded)).toFixed(0)} ms\n` +
+    `[${MODE === 'rays' ? '光束 r3' : 'v1'}] 相机 ${st.res} @ ${st.camFps ? st.camFps.toFixed(0) : '?'} fps · 解码 ${st.fps.toFixed(1)} 帧/s · 平均 ${(st.msSum / Math.max(1, st.decoded)).toFixed(0)} ms\n` +
     `已解码 ${st.decoded} 帧 · 找到光泡 ${st.found} · 读出 ${st.ok} · 用时 ${((now - st.t0) / 1000).toFixed(1)} s · 缩放 ${st.zoom}x\n` +
-    (l ? `上一帧：${l.ok ? '读出 …' + l.secret.slice(-4) + (l.corrected ? `（纠正 ${l.corrected} 字节）` : '') : (l.stage || '-')}` +
+    (l ? `上一帧：${l.ok ? '读出 …' + l.secret.slice(-4) + (l.corrected ? `（纠正 ${l.corrected} 字节）` : '') : (l.stage || '-') + (l.frames ? ` · 累加 ${l.frames} 帧` : '')}` +
          `${l.ellipse ? ` · 半径 ${((l.ellipse.a + l.ellipse.b) / 2).toFixed(0)} px` : ''}${l.contrast ? ` · 对比 ${l.contrast.toFixed(2)}` : ''}` +
          `${l.perspective != null ? ` · 透视 ${l.perspective.toFixed(3)}` : ''}${l.mirrored ? ' · 镜像' : ''}` : '');
 }

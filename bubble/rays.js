@@ -8,7 +8,7 @@
 //   3. reads the sum through a range of perspectives (the projective maps of the disc onto itself: a tilted phone),
 //      keeping the one where the sync word fits best: each beam against halfway to its neighbours, turn and mirror
 //      from the sync word, Reed-Solomon like any v1 code.
-import { RINGS, SYNC, _internals } from './bubble-code.js';
+import { RINGS, SYNC, _internals } from './bubble-code.js?v=r3';
 
 const { bitsToPayload, fitEllipse, ellipseRadiusRatio, bil, boost } = _internals;
 export const RAYS = 28, SEG = [0.86, 0.78, 0.70, 0.62, 0.54, 0.46, 0.38];  // 28 wide beams x 6 segments

@@ -5,8 +5,8 @@
 //   v1:   Bubble Code v1, every frame read on its own (bubble-code.js).
 //   rays: the faint ray code on the glass ball (rays.js): frames are added up and the sum is read every 4 frames;
 //         the sum starts afresh when the ball is lost or after 48 frames without a reading.
-import { decode } from './bubble-code.js';
-import { RayAccumulator } from './rays.js';
+import { decode } from './bubble-code.js?v=r3';
+import { RayAccumulator } from './rays.js?v=r3';
 
 let acc = null, misses = 0;
 const now = () => performance.now();

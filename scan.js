@@ -13,6 +13,16 @@ const SIZE = 360;  // decoded square (px): the finder's area of the camera pictu
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let stream = null, busy = false, frameId = 0, scanning = false, prevGeom = null, cropRect = null, pairing = null;
+// Dynamic code (the orb's arcs flare one after another): every camera frame goes into a running maximum, so after about
+// one flare cycle (1.2 s) the picture holds every arc; the decoder reads that picture (a static code reads at once).
+let acc = null, accT = 0;
+function accumulate(gray) {
+  const now = performance.now();
+  if (!acc || now - accT > 500) { acc = gray.slice(); accT = now; return; }  // first frame, or the camera stalled
+  const fade = Math.pow(0.985, (now - accT) / 33.3);  // 1.5 % per 30 fps frame, whatever the camera's rate
+  accT = now;
+  for (let i = 0; i < acc.length; i++) { const a = acc[i] * fade; acc[i] = a > gray[i] ? a : gray[i]; }
+}
 
 // ---- status pill: what is happening, a spinner while waiting, and a way out ------------------------------------------
 function status(text, { spin = false, cancel = false } = {}) {
@@ -80,15 +90,19 @@ function steady(r) {
 
 async function loop() {
   if (!scanning) return;
-  if (!busy && video.readyState >= 2) {
-    busy = true;
-    const r = await decode(grabFrame());
-    busy = false;
-    if (!scanning) return;
-    if (r.ok) return onFound(r);
-    const lock = steady(r);
-    finder.classList.toggle('locked', lock);
-    hint(lock ? '找到光点，保持不动' : '把光点放进圆圈里');
+  if (video.readyState >= 2) {
+    accumulate(grabFrame());  // every frame (cheap); decoding runs whenever the worker is free
+    if (!busy) {
+      busy = true;
+      decode(acc.slice()).then((r) => {
+        busy = false;
+        if (!scanning) return;
+        if (r.ok) { onFound(r); return; }
+        const lock = steady(r);
+        finder.classList.toggle('locked', lock);
+        hint(lock ? '找到光点，保持不动' : '把光点放进圆圈里');
+      });
+    }
   }
   requestAnimationFrame(loop);
 }
@@ -109,7 +123,7 @@ async function startCamera() {
   $('close').hidden = false;
   finder.classList.remove('hidden', 'locked');
   hint('把光点放进圆圈里');
-  prevGeom = null;
+  prevGeom = null; acc = null;
   scanning = true; requestAnimationFrame(loop);
 }
 

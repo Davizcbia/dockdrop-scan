@@ -101,7 +101,7 @@ export function ringScore(img, x0, y0, sc, per = 6) {
     score += (j < 3 ? 1 : -1) * vr / bins;
   }
   const ringMean = (r) => { let m = 0; for (let k = 0; k < 48; k++) { const a = 2 * Math.PI * (k + 0.5) / 48; m += bilinear(img, x0 + r * Math.cos(a), y0 + r * Math.sin(a)); } return m / 48; };
-  const contrast = ringMean(0.55 * sc) - ringMean(1.14 * sc);
+  const contrast = ringMean(0.55 * sc) - ringMean(1.20 * sc);  // 1.20: clear of the orb's orbiting streams (up to ~1.09)
   const gate = Math.min(Math.max(contrast / 0.06, 0), 1);
   return score * gate * gate * (3 - 2 * gate);
 }
@@ -157,37 +157,52 @@ export function decodeImage(img, hint = null) {
     }
     if (s0 <= 0) return null;
   }
-  let bestS = 0, bestScore = -1e9;
-  if (!hint) {
+  // Refinement on the sharp image: centre on a shrinking grid, then the scale (scaleSpan: +- fraction searched first).
+  const refine = (g, scaleSpan, firstIt = 0) => {
+    let score = ringScore(img, g.x, g.y, g.s);
+    for (let it = firstIt; it < 4; it++) {
+      const step = Math.max(0.3, g.s * 0.04 / (1 << it));
+      let bx = g.x, by = g.y;
+      for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+        const v = ringScore(img, g.x + dx * step, g.y + dy * step, g.s);
+        if (v > score) { score = v; bx = g.x + dx * step; by = g.y + dy * step; }
+      }
+      g.x = bx; g.y = by;
+      const span = it === firstIt ? scaleSpan : 0.036 / (1 << it);
+      let bs = g.s;
+      for (let k = -12; k <= 12; k++) {
+        const c = g.s * (1 + k * span / 12);
+        const v = ringScore(img, g.x, g.y, c);
+        if (v > score) { score = v; bs = c; }
+      }
+      g.s = bs;
+    }
+    return score;
+  };
+  let best;
+  if (hint) {
+    best = { x: cx, y: cy, s: s0 };
+    best.score = refine(best, 0.036, 1);
+  } else {
+    // Candidate A: straight from the blob (a dense disc, e.g. a dynamic code's accumulated picture).
+    const a = { x: cx, y: cy, s: s0 };
+    a.score = refine(a, 0.15);
+    // Candidate B: coarse search on a blurred copy, then refined.
     const soft = boxBlur(img, Math.max(1, Math.floor(0.05 * s0 + 0.5)));
-    const x0 = cx, y0 = cy; let bx = cx, by = cy;
+    let bs = 0, bScore = -1e9, bx = cx, by = cy;
     for (let sc = s0 * 0.6; sc < Math.min(s0 * 1.5, maxS); sc *= 1.025) {
       const step = Math.max(0.75, 0.06 * sc);
       for (let dy = -5; dy <= 5; dy++) for (let dx = -5; dx <= 5; dx++) {
-        const v = ringScore(soft, x0 + dx * step, y0 + dy * step, sc, 2);
-        if (v > bestScore) { bestScore = v; bestS = sc; bx = x0 + dx * step; by = y0 + dy * step; }
+        const v = ringScore(soft, cx + dx * step, cy + dy * step, sc, 2);
+        if (v > bScore) { bScore = v; bs = sc; bx = cx + dx * step; by = cy + dy * step; }
       }
     }
-    cx = bx; cy = by;
-  } else {
-    bestS = s0;
+    const b = { x: bx, y: by, s: bs };
+    b.score = bs > 0 ? refine(b, 0.036) : -1e9;
+    best = a.score > b.score ? a : b;
   }
-  if (bestS <= 0) return null;
-  bestScore = ringScore(img, cx, cy, bestS);
-  for (let it = hint ? 1 : 0; it < 4; it++) {
-    const step = Math.max(0.3, bestS * 0.04 / (1 << it));
-    let bx = cx, by = cy;
-    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
-      const v = ringScore(img, cx + dx * step, cy + dy * step, bestS);
-      if (v > bestScore) { bestScore = v; bx = cx + dx * step; by = cy + dy * step; }
-    }
-    cx = bx; cy = by;
-    for (let k = -6; k <= 6; k++) {
-      const sc = bestS * (1 + k * 0.006 / (1 << it));
-      const v = ringScore(img, cx, cy, sc);
-      if (v > bestScore) { bestScore = v; bestS = sc; }
-    }
-  }
+  cx = best.x; cy = best.y;
+  const bestS = best.s, bestScore = best.score;
   if (bestScore <= 0) return null;
   const slotMeans = (ring, phase) => {
     const rr = kRingRadius[ring] * bestS, hw = kRingHalfWidth * bestS, val = new Float64Array(kSlots);

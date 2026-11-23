@@ -206,6 +206,40 @@ function findBlob(img) {
   return best > 0.04 ? { cx: bx, cy: by, s: bs } : null;
 }
 
+// 1b. The code's own finder: the bright rim ring between the dark quiet zone and the dark guard band, whatever is round
+//     the bubble (a light background defeats 1.). Coarse search on a 2 px grid near the middle of the picture (where the
+//     scanner's finder puts it), then a finer one. Returns the best few candidates.
+export function findRing(img, { span = 0.3, count = 3 } = {}) {
+  const st = 2, gw = Math.floor(img.w / st), gh = Math.floor(img.h / st), g = new Float32Array(gw * gh);
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    let a = 0; for (let j = 0; j < st; j++) for (let i = 0; i < st; i++) a += img.v[(y * st + j) * img.w + x * st + i];
+    g[y * gw + x] = a / (st * st);
+  }
+  const N = 32, cands = [];
+  const lo = Math.max(5, Math.min(gw, gh) * 0.06), hi = Math.min(gw, gh) * 0.47;
+  for (let R = lo; R < hi; R *= 1.05) {
+    const offs = [0.965, 1.09, 0.885].map((f) => Array.from({ length: N }, (_, k) => {
+      const a = 2 * Math.PI * k / N; return Math.round(R * f * Math.sin(a)) * gw + Math.round(R * f * Math.cos(a));
+    }));
+    const m = Math.ceil(R * 1.1) + 1, sx = Math.floor(gw * span), sy = Math.floor(gh * span);
+    for (let cy = Math.max(m, (gh >> 1) - sy); cy < Math.min(gh - m, (gh >> 1) + sy); cy++)
+      for (let cx = Math.max(m, (gw >> 1) - sx); cx < Math.min(gw - m, (gw >> 1) + sx); cx++) {
+        const c = cy * gw + cx; let rim = 0, out = 0, inn = 0, minRim = 1e9;
+        for (let k = 0; k < N; k++) { const v = g[c + offs[0][k]]; rim += v; if (v < minRim) minRim = v; out += g[c + offs[1][k]]; inn += g[c + offs[2][k]]; }
+        const score = (rim - 0.5 * (out + inn)) / N;
+        if (score > 0.05) cands.push({ score, cx, cy, R });
+      }
+  }
+  cands.sort((a, b) => b.score - a.score);
+  const picked = [];
+  for (const c of cands) {
+    if (picked.length >= count) break;
+    if (picked.some((p) => Math.hypot(p.cx - c.cx, p.cy - c.cy) < p.R * 0.3)) continue;
+    picked.push(c);
+  }
+  return picked.map((c) => ({ cx: (c.cx + 0.5) * st, cy: (c.cy + 0.5) * st, s: c.R * st, score: c.score, ring: true }));
+}
+
 // 2. The rim's outer edge along rays from the centre, then an ellipse through those points (least squares conic,
 //    the worst fifth dropped twice). A tilted phone sees the round bubble as an ellipse; the fit undoes it.
 function fitRim(img, g) {
@@ -213,7 +247,13 @@ function fitRim(img, g) {
   const N = 72;
   for (let k = 0; k < N; k++) {
     const a = 2 * Math.PI * k / N, c = Math.cos(a), s = Math.sin(a);
-    const r0 = g.s * 0.7, r1 = g.s * 1.45, step = Math.max(0.4, g.s / 200);
+    // where to look along the ray: round a known ellipse (refit), round the ring finder's circle, or (rough blob) wide
+    let r0 = g.s * 0.7, r1 = g.s * 1.45;
+    if (g.e) {
+      const da = a - g.e.theta, rho = 1 / Math.hypot(Math.cos(da) / g.e.a, Math.sin(da) / g.e.b);
+      r0 = rho * 0.9; r1 = rho * 1.1;
+    } else if (g.ring) { r0 = g.s * 0.84; r1 = g.s * 1.18; }
+    const step = Math.max(0.4, g.s / 200);
     let bestD = 0, bestR = -1, prev = null, prev2 = null;
     for (let r = r0; r < r1; r += step) {
       const v = bil(img, g.cx + r * c, g.cy + r * s);
@@ -284,7 +324,7 @@ function mapPoint(e, r, t) {
 //    the boost (vx, vy) and radius rho that put those points on one circle once the boost is undone. Gauss-Newton,
 //    outliers dropped. Returns { vx, vy } or null (no clear inner ring: the caller keeps the affine map).
 function fitInner(img, e) {
-  const pts = [], N = 64;
+  const ptsIn = [], ptsNear = [], N = 64;
   for (let k = 0; k < N; k++) {
     const a = 2 * Math.PI * k / N, c = Math.cos(a), s = Math.sin(a);
     const ct = Math.cos(e.theta), st = Math.sin(e.theta);
@@ -301,17 +341,26 @@ function fitInner(img, e) {
     const d = []; let dmin = 0;
     for (let i = 2; i < M - 1; i++) { d.push(val[i + 2] + val[i + 1] - val[i - 1] - val[i - 2]); dmin = Math.min(dmin, d[d.length - 1]); }
     if (dmin > -0.16) continue;
-    // the innermost clear bright -> dark edge (local minimum of the derivative at half the ray's strongest)
+    // clear bright -> dark edges (local minima of the derivative at half the ray's strongest): the innermost one (a
+    // plain core) and the one nearest to where the inner ring's edge belongs (art in the core with edges of its own)
+    let inR = -1, nearR = -1, nearDist = 1e9;
     for (let i = 1; i < d.length - 1; i++) {
       if (d[i] < 0.5 * dmin && d[i] <= d[i - 1] && d[i] <= d[i + 1]) {
-        // sub-step peak (parabola)
-        const den = d[i - 1] - 2 * d[i] + d[i + 1], off = den > 0 ? 0.5 * (d[i - 1] - d[i + 1]) / den : 0;
+        const den = d[i - 1] - 2 * d[i] + d[i + 1], off = den > 0 ? 0.5 * (d[i - 1] - d[i + 1]) / den : 0;  // sub-step
         const r = r0 + (i + 2 + off) * step;
-        pts.push([r * c, r * s]);
-        break;
+        if (inR < 0) inR = r;
+        if (Math.abs(r - INNER[1]) < nearDist) { nearDist = Math.abs(r - INNER[1]); nearR = r; }
       }
     }
+    if (inR > 0) ptsIn.push([inR * c, inR * s]);
+    if (nearR > 0) ptsNear.push([nearR * c, nearR * s]);
   }
+  // both point sets fitted; every plausible fit returned, best first (the decoder tries them in turn)
+  const fits = [fitBoost(ptsIn), fitBoost(ptsNear)].filter(Boolean).sort((a, b) => a.rms - b.rms);
+  if (fits.length === 2 && Math.hypot(fits[0].vx - fits[1].vx, fits[0].vy - fits[1].vy) < 0.005) fits.pop();
+  return fits;
+}
+function fitBoost(pts) {
   if (pts.length < 24) return null;
   let use = pts, vx = 0, vy = 0, rho = INNER[1];
   const resid = (p, X, Y, R) => { const [x, y] = boost(-X, -Y, p[0], p[1]); return Math.hypot(x, y) - R; };
@@ -353,19 +402,37 @@ function sampleAt(img, e, r, t, dr, dt, n = 1) {  // mean over a small patch ((2
 }
 
 // Full decode of one frame. Returns { ok, payload..., geometry, diagnostics } or { ok: false, stage }.
-export function decode(img) {
+// opts.hint { cx, cy, s }: where the bubble is (s: rim radius, px) when the caller already knows (the invisible code's
+// accumulated picture has no bright disc to find).
+export function decode(img, opts = {}) {
   const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-  const g = findBlob(img);
+  if (!opts.hint) {
+    // the bright disc first (fast); if that does not read, the rim ring (works on any surroundings)
+    const first = decode(img, { hint: findBlob(img) || { none: true } });
+    if (first.ok) { first.ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0; return first; }
+    let last = first;
+    for (const h of findRing(img)) {
+      const r = decode(img, { hint: h });
+      if (r.ok) { r.ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0; return r; }
+      last = r;
+    }
+    last.ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+    return last;
+  }
+  const g = opts.hint.none ? null : opts.hint;
   if (!g) return { ok: false, stage: 'no bubble' };
   let e = fitRim(img, g);
   if (!e) return { ok: false, stage: 'no rim', g };
   // refine once from the ellipse's own centre and size
-  const e2 = fitRim(img, { cx: e.cx, cy: e.cy, s: (e.a + e.b) / 2 });
+  const e2 = fitRim(img, { cx: e.cx, cy: e.cy, s: (e.a + e.b) / 2, e });
   if (e2) e = e2;
   // with the perspective from the inner ring first; the plain affine map if that fails (or there is no inner ring)
-  const inner = fitInner(img, e);
   let r = null;
-  if (inner) { r = readCode(img, { ...e, vx: inner.vx, vy: inner.vy }); if (r.ok) r.inner = inner; }
+  for (const inner of fitInner(img, e)) {
+    const ri = readCode(img, { ...e, vx: inner.vx, vy: inner.vy });
+    if (ri.ok) { ri.inner = inner; r = ri; break; }
+    if (!r) r = ri;
+  }
   if (!r || !r.ok) { const r2 = readCode(img, e); if (r2.ok || !r) r = r2; }
   r.ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   return r;
@@ -421,7 +488,7 @@ function readCode(img, e) {
         p = bitsToPayload(b2);
       }
     }
-    if (p) return { ok: true, ...p, mirrored: !!c.mir, ellipse: e, contrast };
+    if (p) return { ok: true, ...p, mirrored: !!c.mir, t0: c.t0, ellipse: e, contrast };
   }
   return { ok: false, stage: 'unreadable', e, contrast };
 }
@@ -429,4 +496,13 @@ function readCode(img, e) {
 export const CELLS = TOTAL_CELLS;
 
 // Test hooks (not used by the scanner).
-export const _internals = { findBlob, fitRim, fitInner, sampleAt, mapPoint, boost };
+// The data cells' centres as seen with a known geometry (tests: reading a weak code where a strong one was found).
+function cellCentres(e, t0, mir) {
+  const out = [];
+  for (let k = 0; k < RINGS.length; k++) for (let j = k === 0 ? SYNC.length : 0; j < RINGS[k].n; j++) {
+    const t = t0 + (mir ? -1 : 1) * 2 * Math.PI * (j + 0.5) / RINGS[k].n;
+    out.push({ k, j, t, r: RINGS[k].r, xy: mapPoint(e, RINGS[k].r, t) });
+  }
+  return out;
+}
+export const _internals = { findBlob, fitRim, fitInner, sampleAt, mapPoint, boost, cellCentres, readCode, bitsToPayload, fitEllipse, ellipseRadiusRatio, bil };

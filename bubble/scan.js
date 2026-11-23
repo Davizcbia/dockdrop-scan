@@ -14,6 +14,10 @@ const gctx = grab.getContext('2d', { willReadFrequently: true });
 const SIZE = 400;  // decoded square (px)
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const DEBUG = params.get('debug') !== '0';  // Phase 1: diagnostics on unless ?debug=0
+// ?mode=rays: the faint ray code on the liquid-glass ball (frames added up); default: Bubble Code v1
+const MODE = params.get('mode') === 'rays' ? 'rays' : 'v1';
+// ?nopair=1: only show what was read (tests without a computer waiting to pair)
+const NOPAIR = params.get('nopair') === '1';
 
 let stream = null, scanning = false, busy = false, frameId = 0, pairing = null;
 // statistics for this camera session
@@ -59,13 +63,14 @@ function decode(gray) {
     const id = ++frameId;
     const on = (e) => { if (e.data.id === id) { worker.removeEventListener('message', on); resolve(e.data); } };
     worker.addEventListener('message', on);
-    worker.postMessage({ id, w: SIZE, h: SIZE, gray }, [gray.buffer]);
+    worker.postMessage({ id, w: SIZE, h: SIZE, gray, mode: MODE }, [gray.buffer]);
   });
 }
 
 // Accepting a reading: a Reed-Solomon codeword that needed no correction is certain (all 8 check bytes agree by
 // chance 1 in 2^64); one that was corrected must be read the same twice within 2 s.
 function accept(r) {
+  if (MODE === 'rays') return true;  // the sum of many frames, Reed-Solomon checked; the pairing's HMAC checks again
   if (r.corrected === 0) return true;
   const now = performance.now();
   st.reads = st.reads.filter((x) => now - x.t < 2000);
@@ -124,7 +129,8 @@ function loop() {
     if (!busy) {
       busy = true;
       // a bubble that is small in the picture: every other frame looks at the middle at twice the resolution
-      const zoom = st.last && st.last.ellipse ? (st.last.ellipse.a < 34 && st.zoom === 1 ? 2 : st.last.ellipse.a > 170 && st.zoom === 2 ? 1 : st.zoom) : (st.frames % 2 ? 2 : 1);
+      let zoom = st.last && st.last.ellipse ? (st.last.ellipse.a < 34 && st.zoom === 1 ? 2 : st.last.ellipse.a > 170 && st.zoom === 2 ? 1 : st.zoom) : (st.frames % 2 ? 2 : 1);
+      if (MODE === 'rays') zoom = 1;  // the frames are added up: always the same crop
       st.zoom = zoom; st.frames++;
       const { gray, screen } = grabFrame(zoom);
       decode(gray).then((r) => {
@@ -163,6 +169,7 @@ async function startCamera() {
   finder.classList.remove('hidden', 'locked');
   hint('把光泡放进圆圈里');
   st = newStats();
+  worker.postMessage({ reset: true });
   const s = stream.getVideoTracks()[0].getSettings ? stream.getVideoTracks()[0].getSettings() : {};
   st.res = `${s.width || video.videoWidth}x${s.height || video.videoHeight}`; st.camFps = s.frameRate || 0;
   scanning = true; requestAnimationFrame(loop);
@@ -196,7 +203,7 @@ async function found(r) {
   finder.classList.add('hidden'); $('diag').hidden = true;
   hint('已识别');
   stopCamera();
-  if (!SIGNAL_URL) { showResult('已识别光泡', `配对码 …${r.secret.slice(-4)}（配对服务未配置，只测试了扫描）`, false, metrics); return; }
+  if (!SIGNAL_URL || NOPAIR) { showResult('已识别光泡', `配对码 …${r.secret.slice(-4)}（配对服务未配置，只测试了扫描）`, false, metrics); return; }
   const ctl = new AbortController(); pairing = ctl;
   const t0 = performance.now();
   try {

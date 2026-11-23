@@ -43,9 +43,8 @@
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.6);
     }
   }
-  .diag { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 76px); padding: 8px 12px; border-radius: 14px;
-    font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace; color: rgba(255,255,255,0.85); white-space: pre-wrap; max-width: 520px; margin: 0 auto; }
   .result-text .metrics { display: block; margin-top: 8px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: rgba(255,255,255,0.6); white-space: pre-line; }
+  #continuePair:not([hidden]) + #again { margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -58,7 +57,6 @@
   <div class="title">DockDrop</div>
   <div class="sub" id="hint">将光泡对准画面中央</div>
 </header>
-<div class="diag glass" id="diag" hidden></div>
 
 <div class="start glass sheet show" id="start">
   <div class="start-title">扫描电脑上的光泡</div>
@@ -70,10 +68,11 @@
   <div class="check" aria-hidden="true"><svg viewBox="0 0 52 52"><path d="M15 27 l8 8 l15 -17"/></svg></div>
   <div class="result-title" id="resultTitle">已连接</div>
   <div class="result-text" id="resultText"></div>
+  <button id="continuePair" class="button" hidden>继续配对</button>
   <button id="again" class="button">再扫一次</button>
 </div>
 
 <div class="status glass" id="status" hidden><span class="spinner" id="spinner"></span><span id="statusText"></span><button id="cancel" class="link" hidden>取消</button></div>
-<script type="module" src="scan.js?v=glass1"></script>
+<script type="module" src="scan.js?v=pair3"></script>
 </body>
 </html>

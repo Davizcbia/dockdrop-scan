@@ -1,5 +1,4 @@
-// Optical Bubble scanner (Phase 1: does the code scan on real phones?). The camera, live decoding in a worker, live
-// diagnostics, then the same pairing as before (../pair.js). Also the QR fallback: the phone's own camera app opens
+// Optical Bubble scanner (Phase 1: does the code scan on real phones?). The camera decodes in a worker, then uses the shared pairing protocol (../pair.js). Also the QR fallback: the phone's own camera app opens
 // this page with #s=<secret>, and it pairs straight away.
 import { SIGNAL_URL as CONFIG_SIGNAL } from '../config.js';
 import { pair } from '../pair.js';
@@ -15,17 +14,17 @@ const grab = document.createElement('canvas');
 const gctx = grab.getContext('2d', { willReadFrequently: true });
 const SIZE = 400;  // decoded square (px)
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const DEBUG = params.get('debug') !== '0';  // Phase 1: diagnostics on unless ?debug=0
 // ?mode=rays: the faint ray code on the liquid-glass ball (frames added up); default: Bubble Code v1
 const MODE = params.get('mode') === 'rays' ? 'rays' : 'v1';
 // ?nopair=1: only show what was read (tests without a computer waiting to pair)
-const NOPAIR = params.get('nopair') === '1';
+let scanOnly = params.get('nopair') === '1';
 
 let stream = null, scanning = false, busy = false, frameId = 0, pairing = null;
 let glassFrame, stopGlass;
+let pendingRead = null;
 // statistics for this camera session
 let st = null;
-const newStats = () => ({ t0: performance.now(), firstFrame: 0, frames: 0, decoded: 0, found: 0, ok: 0, msSum: 0, last: null, zoom: 1, reads: [], fpsT: performance.now(), fpsN: 0, fps: 0, camFps: 0, res: '' });
+const newStats = () => ({ t0: performance.now(), firstFrame: 0, frames: 0, decoded: 0, found: 0, ok: 0, msSum: 0, last: null, zoom: 1, reads: [] });
 
 function status(text, { spin = false, cancel = false } = {}) {
   $('statusText').textContent = text || '';
@@ -33,7 +32,7 @@ function status(text, { spin = false, cancel = false } = {}) {
   $('cancel').hidden = !cancel;
   $('status').hidden = !text;
 }
-function hint(text) { $('hint').textContent = text; }
+function hint(text) { $('hint').textContent = scanOnly ? `测试模式 · ${text}` : text; }
 function showSheet(el) { el.hidden = false; void el.getBoundingClientRect(); setTimeout(() => el.classList.add('show'), 16); }
 function hideSheet(el) {
   if (el.hidden) return Promise.resolve();
@@ -80,18 +79,6 @@ function accept(r) {
   return again;
 }
 
-function showDiag() {
-  if (!DEBUG || !st) return;
-  const now = performance.now(), l = st.last;
-  $('diag').hidden = false;
-  $('diag').textContent =
-    `[${MODE === 'rays' ? '光束 r3' : 'v1'}] 相机 ${st.res} @ ${st.camFps ? st.camFps.toFixed(0) : '?'} fps · 解码 ${st.fps.toFixed(1)} 帧/s · 平均 ${(st.msSum / Math.max(1, st.decoded)).toFixed(0)} ms\n` +
-    `已解码 ${st.decoded} 帧 · 找到光泡 ${st.found} · 读出 ${st.ok} · 用时 ${((now - st.t0) / 1000).toFixed(1)} s · 缩放 ${st.zoom}x\n` +
-    (l ? `上一帧：${l.ok ? '读出 …' + l.secret.slice(-4) + (l.corrected ? `（纠正 ${l.corrected} 字节）` : '') : (l.stage || '-') + (l.frames ? ` · 累加 ${l.frames} 帧` : '')}` +
-         `${l.ellipse ? ` · 半径 ${((l.ellipse.a + l.ellipse.b) / 2).toFixed(0)} px` : ''}${l.contrast ? ` · 对比 ${l.contrast.toFixed(2)}` : ''}` +
-         `${l.perspective != null ? ` · 透视 ${l.perspective.toFixed(3)}` : ''}${l.mirrored ? ' · 镜像' : ''}` : '');
-}
-
 // QR in the camera too, where the browser can (BarcodeDetector: Android Chrome / Samsung Internet; not iOS Safari).
 let qrDetector = null;
 if ('BarcodeDetector' in window) {
@@ -122,14 +109,11 @@ function loop() {
       decode(gray).then((r) => {
         busy = false;
         if (!scanning) return;
-        st.decoded++; st.msSum += r.ms; st.fpsN++;
-        const now = performance.now();
-        if (now - st.fpsT > 1000) { st.fps = st.fpsN * 1000 / (now - st.fpsT); st.fpsN = 0; st.fpsT = now; }
+        st.decoded++; st.msSum += r.ms;
         if (r.ellipse) st.found++;
         st.last = r;
         hint(r.ellipse ? '找到光泡，保持不动' : ALIGN_HINT);
         if (r.ok) { st.ok++; if (accept(r)) { found({ ...r, via: 'bubble' }); return; } }
-        showDiag();
       });
     }
   }
@@ -153,8 +137,6 @@ async function startCamera() {
   hint(ALIGN_HINT);
   st = newStats();
   worker.postMessage({ reset: true });
-  const s = stream.getVideoTracks()[0].getSettings ? stream.getVideoTracks()[0].getSettings() : {};
-  st.res = `${s.width || video.videoWidth}x${s.height || video.videoHeight}`; st.camFps = s.frameRate || 0;
   focus.hidden = false;
   scanning = true; requestAnimationFrame(loop);
   glassFrame = requestAnimationFrame(() => {
@@ -176,8 +158,9 @@ function stopCamera() {
 
 async function backToStart() {
   if (pairing) { pairing.abort(); pairing = null; }
+  pendingRead = null;
   stopCamera();
-  status(''); $('diag').hidden = true;
+  status('');
   $('close').hidden = true;
   await hideSheet($('result'));
   hint(ALIGN_HINT);
@@ -197,10 +180,25 @@ async function found(r) {
   const scanT = st ? (performance.now() - (st.firstFrame || st.t0)) / 1000 : 0;
   const metrics = st ? `识别：${r.via === 'qr' ? '二维码' : '光泡'} · 第一帧后 ${scanT.toFixed(2)} s · 解码 ${st.decoded} 帧 · 平均 ${(st.msSum / Math.max(1, st.decoded)).toFixed(0)} ms` + (r.corrected ? ` · 纠正 ${r.corrected} 字节` : '') : '识别：备用二维码（相机应用）';
   if (navigator.vibrate) navigator.vibrate(20);
-  $('diag').hidden = true;
   hint('已识别');
   stopCamera();
-  if (!SIGNAL_URL || NOPAIR) { showResult('已识别光泡', `配对码 …${r.secret.slice(-4)}（配对服务未配置，只测试了扫描）`, false, metrics); return; }
+  if (!SIGNAL_URL || scanOnly) {
+    const text = SIGNAL_URL
+      ? '这是只读码的测试模式。点「继续配对」后，电脑才会收到连接结果。'
+      : '配对服务尚未配置。';
+    showResult('已读码，未配对', `配对码 …${r.secret.slice(-4)}。\n${text}`, false, metrics);
+    if (SIGNAL_URL) {
+      pendingRead = { r, metrics };
+      $('continuePair').hidden = false;
+      $('again').classList.add('secondary');
+    }
+    return;
+  }
+  await connect(r, metrics);
+}
+
+async function connect(r, metrics) {
+  hint('已识别，正在配对');
   const ctl = new AbortController(); pairing = ctl;
   const t0 = performance.now();
   try {
@@ -208,6 +206,7 @@ async function found(r) {
     status('正在连接…', { spin: true, cancel: true });
     const res = await pair({ signalUrl: SIGNAL_URL, secret: r.secret, role: 'guest', name, signal: ctl.signal, onStatus: (t) => status(t, { spin: true, cancel: true }) });
     pairing = null; status(''); $('close').hidden = true;
+    hint('已连接');
     if (navigator.vibrate) navigator.vibrate([12, 60, 12]);
     showResult('已连接', `已和 ${res.peerName || '电脑'} 配对。`, false, metrics + `\n握手 ${((performance.now() - t0) / 1000).toFixed(2)} s`);
     window.dockdropLink = res;
@@ -221,6 +220,8 @@ async function found(r) {
 }
 
 function showResult(title, text, failed = false, metrics = '') {
+  $('continuePair').hidden = true;
+  $('again').classList.remove('secondary');
   $('resultTitle').textContent = title;
   $('resultText').textContent = text;
   if (metrics) { const m = document.createElement('span'); m.className = 'metrics'; m.textContent = metrics; $('resultText').appendChild(m); }
@@ -233,7 +234,22 @@ function showResult(title, text, failed = false, metrics = '') {
 $('go').onclick = startCamera;
 $('close').onclick = backToStart;
 $('cancel').onclick = backToStart;
-$('again').onclick = async () => { await hideSheet($('result')); startCamera(); };
+$('again').onclick = async () => { pendingRead = null; await hideSheet($('result')); startCamera(); };
+$('continuePair').onclick = async () => {
+  const read = pendingRead;
+  if (!read) return;
+  pendingRead = null;
+  scanOnly = false;
+  const url = new URL(location.href);
+  url.searchParams.delete('nopair');
+  history.replaceState(null, '', url);
+  await hideSheet($('result'));
+  await connect(read.r, read.metrics);
+};
+
+if (scanOnly) {
+  hint('只读码');
+}
 
 // QR fallback: opened by the phone's camera app with the secret in the fragment (never sent to any server). Pair at once
 // and drop the fragment, so a reload does not reuse the one-time code.

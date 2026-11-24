@@ -3,10 +3,10 @@
 // Out: { id, ok, secret (hex), flags, corrected, mirrored, perspective, ellipse {cx, cy, a, b, theta}, contrast, stage,
 //        ms, frames }
 //   v1:   Bubble Code v1, every frame read on its own (bubble-code.js).
-//   rays: the faint ray code on the glass ball (rays.js): frames are added up and the sum is read every 4 frames;
+//   rays: try a cheap early read after 2 frames, then the full search every 4 frames.
 //         the sum starts afresh when the ball is lost or after 48 frames without a reading.
 import { decode } from './bubble-code.js?v=r3';
-import { RayAccumulator } from './rays.js?v=fast1';
+import { RayAccumulator } from './rays.js?v=early1';
 
 let acc = null, misses = 0;
 const now = () => performance.now();
@@ -21,7 +21,8 @@ self.onmessage = (e) => {
     const found = acc.add(img);
     misses = found ? 0 : misses + 1;
     let r = { ok: false, stage: found ? 'adding up' : 'no ball' };
-    if (found && acc.frames % 4 === 0) r = acc.read();
+    if (found && acc.frames === 2) r = acc.read({ quick: true });
+    else if (found && acc.frames % 4 === 0) r = acc.read();
     const p = acc.prev;
     const out = {
       id, ok: !!r.ok, ms: now() - t0, stage: r.ok ? '' : r.stage, frames: acc.frames, contrast: 0,
@@ -30,6 +31,7 @@ self.onmessage = (e) => {
       ellipse: p ? { cx: p.cx, cy: p.cy, a: p.a, b: p.b, theta: p.theta } : null,
     };
     if (r.ok || misses > 5 || acc.frames >= 48) { acc = null; misses = 0; }
+    else if (found && acc.frames % 12 === 0) acc.reacquire();
     self.postMessage(out);
     return;
   }

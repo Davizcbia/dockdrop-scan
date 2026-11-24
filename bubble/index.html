@@ -45,6 +45,32 @@
   }
   .result-text .metrics { display: block; margin-top: 8px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: rgba(255,255,255,0.6); white-space: pre-line; }
   #continuePair:not([hidden]) + #again { margin-top: 8px; }
+  .transfer-mode {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 4px; margin-bottom: 14px;
+    border-radius: 16px; background: rgba(255,255,255,.07);
+  }
+  .transfer-mode button {
+    min-height: 44px; border: 0; border-radius: 12px; background: transparent;
+    color: inherit; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  .transfer-mode button[aria-pressed="true"] { background: rgba(255,255,255,.15); box-shadow: 0 1px 3px #0004; }
+  .transfer-mode button:focus-visible, .received a:focus-visible { outline: 2px solid #fff; }
+  .transfer-fields[hidden], .received[hidden] { display: none; }
+  .transfer-fields { display: grid; gap: 8px; margin: 0 0 16px; text-align: left; }
+  .transfer-fields label { font-size: 13px; font-weight: 600; }
+  .transfer-fields input, .transfer-fields textarea {
+    min-width: 0; width: 100%; padding: 10px 12px; border-radius: 14px; color: inherit;
+    border: 1px solid rgba(255,255,255,.20); background: rgba(255,255,255,.07); font: inherit;
+  }
+  .transfer-fields textarea { resize: vertical; max-height: 160px; font-size: 16px; }
+  .transfer-fields input::file-selector-button {
+    margin-inline-end: 8px; border: 0; border-radius: 9px; padding: 5px 8px;
+    background: rgba(255,255,255,.16); color: inherit; font: inherit;
+  }
+  .received { max-height: min(38dvh, 280px); overflow: auto; margin-bottom: 12px; }
+  .received a { color: inherit; display: block; padding: 10px 6px; text-align: left; overflow-wrap: anywhere; }
+  .received textarea { width: 100%; padding: 10px; border-radius: 12px; background: #ffffff12; color: inherit; font: inherit; }
+  .received .button { padding: 10px; margin: 6px 0; }
 </style>
 </head>
 <body>
@@ -59,8 +85,17 @@
 </header>
 
 <div class="start glass sheet show" id="start">
-  <div class="start-title">扫描电脑上的光泡</div>
-  <div class="start-text">在电脑上打开"添加设备"，对准屏幕上的光泡即可配对。画面只在手机上处理，不会上传。</div>
+  <div class="transfer-mode" role="group" aria-label="收发方向">
+    <button type="button" id="modeSend" aria-pressed="true">发送到电脑</button>
+    <button type="button" id="modeReceive" aria-pressed="false">从电脑接收</button>
+  </div>
+  <div class="start-text" id="startText">准备好内容，在电脑桌面或资源管理器右键选择 DockDrop，再扫描光泡。</div>
+  <div class="transfer-fields" id="transferFields">
+    <label for="sendFiles">文件</label>
+    <input id="sendFiles" type="file" multiple>
+    <label for="sendText">文字</label>
+    <textarea id="sendText" rows="2" placeholder="输入或粘贴文字"></textarea>
+  </div>
   <button id="go" class="button">打开相机</button>
 </div>
 
@@ -68,11 +103,12 @@
   <div class="check" aria-hidden="true"><svg viewBox="0 0 52 52"><path d="M15 27 l8 8 l15 -17"/></svg></div>
   <div class="result-title" id="resultTitle">已连接</div>
   <div class="result-text" id="resultText"></div>
+  <div class="received" id="received" hidden></div>
   <button id="continuePair" class="button" hidden>继续配对</button>
-  <button id="again" class="button">再扫一次</button>
+  <button id="again" class="button">返回收发</button>
 </div>
 
 <div class="status glass" id="status" hidden><span class="spinner" id="spinner"></span><span id="statusText"></span><button id="cancel" class="link" hidden>取消</button></div>
-<script type="module" src="scan.js?v=result1"></script>
+<script type="module" src="scan.js?v=transfer2"></script>
 </body>
 </html>

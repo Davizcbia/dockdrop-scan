@@ -114,11 +114,25 @@ function ridgeEllipse(img, cx, cy, range) {
 
 // ---- 2. adding frames up --------------------------------------------------------------------------------------------
 export class RayAccumulator {
-  constructor() { this.frames = 0; this.sum = new Float64Array(RB * AB); this.prev = null; }
+  constructor() {
+    this.frames = 0;
+    this.sum = new Float64Array(RB * AB);
+    this.prev = null;
+    this.lastLock = null;
+  }
   add(img) {
+    const old = this.lastLock;
     const e = locate(img, this.prev);
     this.prev = e;
     if (!e) return false;
+    if (old && !e.tracked && (Math.hypot(e.cx - old.cx, e.cy - old.cy) > 0.30 * old.a ||
+        Math.abs((e.a + e.b) / (old.a + old.b) - 1) >= 0.18 ||
+        Math.abs(Math.min(e.a, e.b) / Math.max(e.a, e.b) - Math.min(old.a, old.b) / Math.max(old.a, old.b)) >= 0.12)) {
+      // A substantially different framing should not inherit a stale polar image.
+      this.sum.fill(0);
+      this.frames = 0;
+    }
+    this.lastLock = e;
     // the ellipse as a symmetric map (R diag(a, b) R^T): unit circle -> ellipse, angles as in the picture
     const c = Math.cos(e.theta), s = Math.sin(e.theta);
     const m11 = e.a * c * c + e.b * s * s, m12 = (e.a - e.b) * c * s, m22 = e.a * s * s + e.b * c * c;
@@ -133,9 +147,13 @@ export class RayAccumulator {
     return true;
   }
 
+  reacquire() { this.prev = null; }
+
   // ---- 3. reading -------------------------------------------------------------------------------------------------
-  read() {
+  read({ quick = false } = {}) {
     if (!this.frames) return { ok: false, stage: 'no frames' };
+    const round = this.prev && Math.min(this.prev.a, this.prev.b) / Math.max(this.prev.a, this.prev.b) > 0.94;
+    if (quick && !round) return { ok: false, stage: 'adding up', frames: this.frames };
     const P = this.sum.map((v) => v / this.frames);
     const polar = (x, y) => {  // the averaged picture at a point of the normalised disc (bilinear)
       const rho = Math.hypot(x, y);
@@ -214,21 +232,22 @@ export class RayAccumulator {
           const bits = [], conf = [];
           for (let i = SYNC.length; i < TOTAL; i++) { const v = val(i, t0, c.mir); bits.push(v > 0 ? 1 : 0); conf.push(Math.abs(v)); }
           let p = bitsToPayload(bits);
-          if (!p && tried.length === 1 && dl === 0) {
+          if (!quick && !p && tried.length === 1 && dl === 0) {
             const weak = conf.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]).slice(0, 4).map((x) => x[1]);
             for (let mm = 1; mm < 16 && !p; mm++) { const b2 = bits.slice(); for (let q = 0; q < 4; q++) if (mm & (1 << q)) b2[weak[q]] ^= 1; p = bitsToPayload(b2); }
           }
-          if (p) return { ok: true, ...p, mirrored: !!c.mir, frames: this.frames, perspective: [vx, vy] };
+          if (p && (!quick || p.corrected <= 1)) return { ok: true, ...p, mirrored: !!c.mir, frames: this.frames, perspective: [vx, vy] };
         }
       }
       return null;
     };
     // A near-round finder often needs no projective correction. Keep the
     // full perspective search for captures that fail the first attempt.
-    if (this.prev && Math.min(this.prev.a, this.prev.b) / Math.max(this.prev.a, this.prev.b) > 0.94) {
+    if (round) {
       const result = tryPerspective(0, 0);
       if (result) return result;
     }
+    if (quick) return { ok: false, stage: 'adding up', frames: this.frames };
     for (const { vx, vy } of [...search(energy), ...search(stripes)]) {
       const result = tryPerspective(vx, vy);
       if (result) return result;

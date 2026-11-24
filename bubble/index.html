@@ -75,7 +75,7 @@
   .transfer-fold { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 320ms cubic-bezier(.22, .75, .24, 1); }
   .transfer-fold[inert] { grid-template-rows: 0fr; }
   .transfer-fold-clip { min-height: 0; overflow: hidden; }
-  .transfer-fields { display: grid; gap: 8px; padding: 2px 2px 16px; text-align: left; transition: opacity 220ms ease; }
+  .transfer-fields { display: grid; gap: 8px; padding: 2px 2px 14px; text-align: left; transition: opacity 220ms ease; }
   .transfer-fold[inert] .transfer-fields { opacity: 0; }
   .received[hidden] { display: none; }
   .transfer-fields label { font-size: 13px; font-weight: 600; }
@@ -114,16 +114,16 @@
 </header>
 
 <div class="start glass sheet show" id="start">
-  <div class="transfer-mode" id="transferMode" role="group" aria-label="收发方向">
-    <button type="button" id="modeSend" aria-pressed="true">发送到电脑</button>
-    <button type="button" id="modeReceive" aria-pressed="false">从电脑接收</button>
-  </div>
   <div class="transfer-fold" id="transferFields"><div class="transfer-fold-clip"><div class="transfer-fields">
     <label for="sendFiles">文件</label>
     <input id="sendFiles" type="file" multiple>
     <label for="sendText">文字</label>
     <textarea id="sendText" rows="3" placeholder="输入或粘贴文字"></textarea>
   </div></div></div>
+  <div class="transfer-mode" id="transferMode" role="group" aria-label="收发方向">
+    <button type="button" id="modeSend" aria-pressed="true">发送到电脑</button>
+    <button type="button" id="modeReceive" aria-pressed="false">从电脑接收</button>
+  </div>
   <button id="go" class="button">打开相机</button>
 </div>
 

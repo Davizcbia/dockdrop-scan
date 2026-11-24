@@ -421,11 +421,18 @@ $('cancel').onclick = backToStart;
 $('again').onclick = backToStart;
 function setReceiveMode(receive) {
   receiveMode = receive;
+  syncFoldHeight();
   $('modeSend').setAttribute('aria-pressed', String(!receive));
   $('modeReceive').setAttribute('aria-pressed', String(receive));
   $('transferMode').toggleAttribute('data-receive', receive);
   $('transferFields').inert = receive;
 }
+// Track the fields' natural height (it changes when the text box is resized) so the fold can animate to it.
+function syncFoldHeight() {
+  $('transferFields').style.setProperty('--fold-open', `${document.querySelector('.transfer-fields').offsetHeight}px`);
+}
+syncFoldHeight();
+new ResizeObserver(syncFoldHeight).observe(document.querySelector('.transfer-fields'));
 $('modeSend').onclick = () => setReceiveMode(false);
 $('modeReceive').onclick = () => setReceiveMode(true);
 $('continuePair').onclick = async () => {

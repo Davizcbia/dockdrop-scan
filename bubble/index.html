@@ -72,9 +72,14 @@
     color: inherit; font: inherit; font-weight: 600; cursor: pointer;
   }
   .transfer-mode button:focus-visible, .received a:focus-visible { outline: 2px solid #fff; }
-  .transfer-fold { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 320ms cubic-bezier(.22, .75, .24, 1); }
-  .transfer-fold[inert] { grid-template-rows: 0fr; }
-  .transfer-fold-clip { min-height: 0; overflow: hidden; }
+  /* The fields sit above the switch and unfold upward: the fold animates its height (kept in step with the
+     fields by scan.js) and its content stays anchored to the bottom edge, next to the switch. */
+  .transfer-fold {
+    display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden;
+    height: var(--fold-open, auto); transition: height 320ms cubic-bezier(.22, .75, .24, 1);
+  }
+  .transfer-fold[inert] { height: 0; }
+  .transfer-fold-clip { flex: none; }
   .transfer-fields { display: grid; gap: 8px; padding: 2px 2px 14px; text-align: left; transition: opacity 220ms ease; }
   .transfer-fold[inert] .transfer-fields { opacity: 0; }
   .received[hidden] { display: none; }
@@ -137,6 +142,6 @@
 </div>
 
 <div class="status glass" id="status" hidden><span class="spinner" id="spinner"></span><span id="statusText"></span><button id="cancel" class="link" hidden>取消</button></div>
-<script type="module" src="scan.js?v=rim-progress1"></script>
+<script type="module" src="scan.js?v=fold-up1"></script>
 </body>
 </html>

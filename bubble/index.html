@@ -9,6 +9,9 @@
 <title>DockDrop 配对 · 光泡扫描</title>
 <link rel="stylesheet" href="../style.css">
 <style>
+  #video { height: 100dvh; }
+  #video:not(.camera-ready) { opacity: 0; }
+
   .scan-control {
     corner-shape: squircle;
     color: #fff;
@@ -134,6 +137,6 @@
 </div>
 
 <div class="status glass" id="status" hidden><span class="spinner" id="spinner"></span><span id="statusText"></span><button id="cancel" class="link" hidden>取消</button></div>
-<script type="module" src="scan.js?v=mobile4"></script>
+<script type="module" src="scan.js?v=camera-start1"></script>
 </body>
 </html>

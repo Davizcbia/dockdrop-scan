@@ -113,7 +113,10 @@ function scheduleScan() {
 function loop() {
   if (!scanning) return;
   if (video.readyState >= 2) {
-    if (!st.firstFrame) st.firstFrame = performance.now();
+    if (!st.firstFrame) {
+      st.firstFrame = performance.now();
+      showCamera();
+    }
     tryQR();
     if (!busy) {
       busy = true;
@@ -137,39 +140,64 @@ function loop() {
       });
     }
   }
-  scheduleScan();
+  if (st.firstFrame) scheduleScan();
+  else cameraFrame = requestAnimationFrame(loop);
 }
 
 async function startCamera() {
+  const button = $('go');
+  if (button.disabled || stream) return;
   draft = receiveMode ? { files: [], text: '' } : { files: [...$('sendFiles').files], text: $('sendText').value };
   try { validateTransfer(draft.files, draft.text); }
   catch (error) { status(transferError(error.message)); return; }
   if (!window.isSecureContext || !navigator.mediaDevices) { status('相机需要 HTTPS 页面'); return; }
+  button.disabled = true;
   status('正在打开相机…', { spin: true });
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
   } catch (e) {
+    button.disabled = false;
     status(e.name === 'NotAllowedError' ? '没有相机权限：请在浏览器设置里允许本网站使用相机' : '无法打开相机');
     return;
   }
   video.srcObject = stream;
-  await video.play().catch(() => {});
-  status('');
-  await hideSheet($('start'));
-  $('close').hidden = false;
-  hint();
+  const openingStream = stream;
+  try {
+    await video.play();
+  } catch {
+    if (stream === openingStream) {
+      stopCamera();
+      status('无法打开相机');
+    }
+    return;
+  }
+  if (stream !== openingStream) return;
   st = newStats();
   worker.postMessage({ reset: true });
+  scanning = true;
+  // Poll readiness on the first paint, then use video-frame callbacks for decoding.
+  cameraFrame = requestAnimationFrame(loop);
+}
+
+function showCamera() {
+  video.classList.add('camera-ready');
+  $('start').classList.remove('show');
+  $('start').hidden = true;
+  $('go').disabled = false;
+  status('');
+  $('close').hidden = false;
+  hint();
   focus.hidden = false;
-  scanning = true; scheduleScan();
   glassFrame = requestAnimationFrame(() => {
     if (scanning) stopGlass = startCameraGlass(video, [$('close'), document.querySelector('.top.scan-control')]);
   });
 }
 function stopCamera() {
   scanning = false;
-  if (useVideoFrames) video.cancelVideoFrameCallback(cameraFrame);
+  if (useVideoFrames && st?.firstFrame) video.cancelVideoFrameCallback(cameraFrame);
   else cancelAnimationFrame(cameraFrame);
+  video.classList.remove('camera-ready');
+  $('go').disabled = false;
   cancelAnimationFrame(glassFrame);
   stopGlass?.();
   stopGlass = null;

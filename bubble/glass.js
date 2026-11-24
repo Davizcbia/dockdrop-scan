@@ -9,6 +9,7 @@ precision mediump float;
 uniform sampler2D camera;
 uniform vec2 size;
 uniform vec4 bounds;
+uniform bool continuousCorners;
 
 void main() {
   vec2 pixel = vec2(gl_FragCoord.x, size.y - gl_FragCoord.y);
@@ -18,10 +19,19 @@ void main() {
   vec2 axis = vec2(clamp(local.x, radius - halfSize.x, halfSize.x - radius), 0.0);
   vec2 radial = local - axis;
   float distance = length(radial);
+  vec2 normal = radial / max(distance, 0.5);
   float depth = radius - distance;
+  if (continuousCorners && halfSize.x > halfSize.y) {
+    vec2 u = abs(radial) / radius;
+    vec2 squared = u*u;
+    float level = sqrt(sqrt(dot(squared, squared)));
+    vec2 grad = squared*u;
+    float magnitude = max(length(grad), 0.001);
+    normal = sign(radial) * grad / magnitude;
+    depth = (1.0 - level) * radius * (level > 0.5 ? level*level*level / magnitude : 1.0);
+  }
   if (depth < -0.5) discard;
 
-  vec2 normal = radial / max(distance, 0.5);
   float curvature = 1.0 - smoothstep(0.0, 12.0, depth);
   vec2 refracted = pixel - normal * (1.2 + 9.0 * curvature * curvature);
   vec2 offset = vec2(1.7) / size;
@@ -86,6 +96,7 @@ export function startCameraGlass(video, controls) {
   gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
   const size = gl.getUniformLocation(program, 'size');
   const bounds = gl.getUniformLocation(program, 'bounds');
+  gl.uniform1i(gl.getUniformLocation(program, 'continuousCorners'), CSS.supports('corner-shape', 'squircle') ? 1 : 0);
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);

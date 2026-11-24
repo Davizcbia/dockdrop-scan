@@ -4,13 +4,13 @@ import { SIGNAL_URL as CONFIG_SIGNAL } from '../config.js';
 import { pair } from '../pair.js';
 import { startCameraGlass } from './glass.js?v=glass1';
 import { receiveTransfer, sendTransfer, validateTransfer } from './transfer.js?v=transfer2';
+import { contentsLabel, locale, t, transferError } from './locale.js?v=mobile4';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const SIGNAL_URL = params.get('signal') || CONFIG_SIGNAL;
 const SHOW_METRICS = params.get('debug') === '1';
 const video = $('video'), focus = $('focus');
-const ALIGN_HINT = '将光泡对准画面中央';
 const worker = new Worker(new URL('./worker.js?v=early1', import.meta.url), { type: 'module' });
 const SIZE = 400;  // decoded square (px)
 const grab = document.createElement('canvas');
@@ -35,12 +35,17 @@ let st = null;
 const newStats = () => ({ t0: performance.now(), firstFrame: 0, firstLock: 0, frames: 0, decoded: 0, found: 0, ok: 0, msSum: 0, last: null, zoom: 1, reads: [] });
 
 function status(text, { spin = false, cancel = false } = {}) {
-  $('statusText').textContent = text || '';
+  $('statusText').textContent = text ? t(text) : '';
   $('spinner').hidden = !spin;
   $('cancel').hidden = !cancel;
   $('status').hidden = !text;
 }
-function hint(text) { $('hint').textContent = scanOnly ? `测试模式 · ${text}` : text; }
+function hint(text = '') {
+  const label = $('hint');
+  const message = text ? (scanOnly ? t('测试模式 · {hint}', {hint: t(text)}) : t(text)) : '';
+  if (label.textContent !== message) label.textContent = message;
+  label.hidden = !message;
+}
 function showSheet(el) { el.hidden = false; void el.getBoundingClientRect(); setTimeout(() => el.classList.add('show'), 16); }
 function hideSheet(el) {
   if (el.hidden) return Promise.resolve();
@@ -127,7 +132,7 @@ function loop() {
           st.found++;
         }
         st.last = r;
-        hint(r.ellipse ? '找到光泡，保持不动' : ALIGN_HINT);
+        hint(r.ellipse ? '找到光泡，保持不动' : '');
         if (r.ok) { st.ok++; if (accept(r)) { found({ ...r, via: 'bubble' }); return; } }
       });
     }
@@ -138,13 +143,13 @@ function loop() {
 async function startCamera() {
   draft = receiveMode ? { files: [], text: '' } : { files: [...$('sendFiles').files], text: $('sendText').value };
   try { validateTransfer(draft.files, draft.text); }
-  catch (error) { status(error.message); return; }
+  catch (error) { status(transferError(error.message)); return; }
   if (!window.isSecureContext || !navigator.mediaDevices) { status('相机需要 HTTPS 页面'); return; }
   status('正在打开相机…', { spin: true });
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
   } catch (e) {
-    status(e.name === 'NotAllowedError' ? '没有相机权限：请在浏览器设置里允许本网站使用相机' : '无法打开相机：' + e.message);
+    status(e.name === 'NotAllowedError' ? '没有相机权限：请在浏览器设置里允许本网站使用相机' : '无法打开相机');
     return;
   }
   video.srcObject = stream;
@@ -152,7 +157,7 @@ async function startCamera() {
   status('');
   await hideSheet($('start'));
   $('close').hidden = false;
-  hint(ALIGN_HINT);
+  hint();
   st = newStats();
   worker.postMessage({ reset: true });
   focus.hidden = false;
@@ -186,7 +191,7 @@ async function backToStart() {
   $('close').hidden = true;
   await hideSheet($('result'));
   clearReceived();
-  hint(ALIGN_HINT);
+  hint();
   showSheet($('start'));
 }
 
@@ -202,8 +207,14 @@ async function found(r) {
   scanning = false;
   const scanT = st ? (performance.now() - (st.firstFrame || st.t0)) / 1000 : 0;
   const lockT = st?.firstLock ? (st.firstLock - st.firstFrame) / 1000 : null;
-  const lock = lockT == null ? '' : ` · 首次定位 ${lockT.toFixed(2)} s`;
-  const metrics = st ? `识别：${r.via === 'qr' ? '二维码' : '光泡'} · 第一帧后 ${scanT.toFixed(2)} s${lock} · 定位 ${st.found}/${st.decoded} 帧 · 平均 ${(st.msSum / Math.max(1, st.decoded)).toFixed(0)} ms` + (r.corrected ? ` · 纠正 ${r.corrected} 字节` : '') : '识别：备用二维码（相机应用）';
+  const metrics = st ? [
+    t('识别：{source} · 第一帧后 {time} s · 定位 {found}/{decoded} 帧 · 平均 {average} ms', {
+      source: t(r.via === 'qr' ? '二维码' : '光泡'), time: scanT.toFixed(2), found: st.found,
+      decoded: st.decoded, average: (st.msSum / Math.max(1, st.decoded)).toFixed(0),
+    }),
+    lockT == null ? '' : t('首次定位 {time} s', {time: lockT.toFixed(2)}),
+    r.corrected ? t('纠正 {count} 字节', {count: r.corrected}) : '',
+  ].filter(Boolean).join(' · ') : t('识别：备用二维码（相机应用）');
   if (navigator.vibrate) navigator.vibrate(20);
   hint('已识别');
   stopCamera();
@@ -211,7 +222,7 @@ async function found(r) {
     const text = SIGNAL_URL
       ? '这是只读码的测试模式。点「继续配对」后，电脑才会收到连接结果。'
       : '配对服务尚未配置。';
-    showResult('已读码，未配对', `配对码 …${r.secret.slice(-4)}。\n${text}`, false, metrics);
+    showResult('已读码，未配对', t('配对码 …{code}。', {code: r.secret.slice(-4)}) + '\n' + t(text), false, metrics);
     if (SIGNAL_URL) {
       pendingRead = { r, metrics };
       $('continuePair').hidden = false;
@@ -227,11 +238,11 @@ async function connect(r, metrics) {
   const ctl = new AbortController(); pairing = ctl;
   const t0 = performance.now();
   try {
-    const name = /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document ? 'iPad' : /Android/.test(navigator.userAgent) ? 'Android 手机' : '浏览器';
+    const name = /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document ? 'iPad' : t(/Android/.test(navigator.userAgent) ? 'Android 手机' : '浏览器');
     status('正在连接…', { spin: true, cancel: true });
     const res = await pair({ signalUrl: SIGNAL_URL, secret: r.secret, role: 'guest', name, signal: ctl.signal, onStatus: (t) => status(t, { spin: true, cancel: true }) });
     pairing = null; status(''); $('close').hidden = true;
-    const details = metrics + `\n握手 ${((performance.now() - t0) / 1000).toFixed(2)} s`;
+    const details = metrics + '\n' + t('握手 {time} s', {time: ((performance.now() - t0) / 1000).toFixed(2)});
     if (draft.files.length || draft.text) {
       await transmit(res, details);
       return;
@@ -239,13 +250,13 @@ async function connect(r, metrics) {
     if (receiveMode && await acceptDesktopTransfer(res, details, r.via === 'qr-app')) return;
     hint('已连接');
     if (navigator.vibrate) navigator.vibrate([12, 60, 12]);
-    showResult('已连接', `已和 ${res.peerName || '电脑'} 配对。`, false, details);
+    showResult('已连接', t('已和 {device} 配对。', {device: t(res.peerName || '电脑')}), false, details);
     window.dockdropLink = res;
   } catch (e) {
     pairing = null;
     if (e.message === 'cancelled') return;
     status(''); $('close').hidden = true;
-    const [title, text] = ERRORS[e.message] || ['没能连接', '请确认手机和电脑连着同一个网络，然后再试一次。（' + e.message + '）'];
+    const [title, text] = ERRORS[e.message] || ['没能连接', '请确认手机和电脑连着同一个网络，然后再试一次。'];
     showResult(title, text, true, metrics);
   }
 }
@@ -258,22 +269,20 @@ async function transmit(connection, metrics) {
   try {
     await sendTransfer(connection.channel, payload, (bytes, total, name) => {
       const progress = total ? ` · ${Math.floor(100 * bytes / total)}%` : '';
-      status(`正在发送 ${name}${progress}`, { spin: true, cancel: true });
+      status(t('正在发送 {name}{progress}', {name, progress}), { spin: true, cancel: true });
     });
     if (activeTransfer !== connection) return;
     $('sendFiles').value = '';
     $('sendText').value = '';
     draft = { files: [], text: '' };
     hint('已发送');
-    const count = payload.files.length;
-    const sent = count ? `${count} 个文件${payload.text ? '和文字' : ''}` : '文字';
-    showResult('已发送', `电脑已接收${sent}。`, false, metrics);
+    showResult('已发送', t('电脑已接收{contents}。', {contents: contentsLabel(payload.files.length, Boolean(payload.text))}), false, metrics);
     window.dockdropLink = connection;
   } catch (error) {
     if (activeTransfer !== connection) return;
     connection.pc.close();
     hint('发送未完成');
-    showResult('发送未完成', error.message, true, metrics);
+    showResult('发送未完成', transferError(error.message), true, metrics);
   } finally {
     if (activeTransfer === connection) { activeTransfer = null; status(''); }
   }
@@ -292,14 +301,14 @@ function showReceived(files, text) {
     value.value = text;
     value.readOnly = true;
     value.rows = 2;
-    value.setAttribute('aria-label', '收到的文字');
+    value.setAttribute('aria-label', t('收到的文字'));
     const copy = document.createElement('button');
     copy.className = 'button secondary';
-    copy.textContent = '复制文字';
+    copy.textContent = t('复制文字');
     copy.onclick = async () => {
       try {
         await navigator.clipboard.writeText(text);
-        copy.textContent = '已复制';
+        copy.textContent = t('已复制');
       } catch {
         value.focus();
         value.select();
@@ -313,7 +322,7 @@ function showReceived(files, text) {
     downloadUrls.push(url);
     link.href = url;
     link.download = file.name;
-    link.textContent = `保存 ${file.name}`;
+    link.textContent = t('保存 {name}', {name: file.name});
     panel.append(link);
   }
   panel.hidden = false;
@@ -326,7 +335,7 @@ async function acceptDesktopTransfer(connection, metrics, fromQr) {
   try {
     const result = await receiveTransfer(connection.channel, (name, received, size) => {
       const progress = size ? ` · ${Math.floor(100 * received / size)}%` : '';
-      status(`正在接收 ${name}${progress}`, { spin: true, cancel: true });
+      status(t('正在接收 {name}{progress}', {name, progress}), { spin: true, cancel: true });
     });
     if (activeTransfer !== connection) return true;
     if (!result) {
@@ -344,8 +353,7 @@ async function acceptDesktopTransfer(connection, metrics, fromQr) {
       return true;
     }
     hint('已接收');
-    const summary = files.length ? `${files.length} 个文件${text ? '和文字' : ''}` : '文字';
-    showResult('已接收', `收到${summary}。`, false, metrics);
+    showResult('已接收', t('收到{contents}。', {contents: contentsLabel(files.length, Boolean(text))}), false, metrics);
     showReceived(files, text);
     window.dockdropLink = connection;
     return true;
@@ -353,7 +361,7 @@ async function acceptDesktopTransfer(connection, metrics, fromQr) {
     if (activeTransfer === connection) {
       connection.pc.close();
       hint('接收未完成');
-      showResult('接收未完成', error.message, true, metrics);
+      showResult('接收未完成', transferError(error.message), true, metrics);
     }
     return true;
   } finally {
@@ -365,8 +373,8 @@ function showResult(title, text, failed = false, metrics = '') {
   clearReceived();
   $('continuePair').hidden = true;
   $('again').classList.remove('secondary');
-  $('resultTitle').textContent = title;
-  $('resultText').textContent = text;
+  $('resultTitle').textContent = t(title);
+  $('resultText').textContent = t(text);
   if (SHOW_METRICS && metrics) {
     const details = document.createElement('span');
     details.className = 'metrics';
@@ -387,10 +395,8 @@ function setReceiveMode(receive) {
   receiveMode = receive;
   $('modeSend').setAttribute('aria-pressed', String(!receive));
   $('modeReceive').setAttribute('aria-pressed', String(receive));
-  $('transferFields').hidden = receive;
-  $('startText').textContent = receive
-    ? '在电脑右键打开 DockDrop，选好要发送的文件或加入剪贴板文字，再扫描光泡。'
-    : '准备好内容，在电脑桌面或资源管理器右键选择 DockDrop，再扫描光泡。';
+  $('transferMode').toggleAttribute('data-receive', receive);
+  $('transferFields').inert = receive;
 }
 $('modeSend').onclick = () => setReceiveMode(false);
 $('modeReceive').onclick = () => setReceiveMode(true);
@@ -406,9 +412,19 @@ $('continuePair').onclick = async () => {
   await connect(read.r, read.metrics);
 };
 
-if (scanOnly) {
-  hint('只读码');
+document.documentElement.lang = locale;
+document.title = t(document.title);
+for (const selector of ['#modeSend', '#modeReceive', 'label[for="sendFiles"]', 'label[for="sendText"]',
+  '#go', '#resultTitle', '#continuePair', '#again', '#cancel']) {
+  const el = document.querySelector(selector);
+  el.textContent = t(el.textContent);
 }
+for (const id of ['transferMode', 'close']) {
+  const el = $(id);
+  el.setAttribute('aria-label', t(el.getAttribute('aria-label')));
+}
+$('sendText').placeholder = t($('sendText').placeholder);
+hint(scanOnly ? '只读码' : '');
 
 // QR fallback: opened by the phone's camera app with the secret in the fragment (never sent to any server). Pair at once
 // and drop the fragment, so a reload does not reuse the one-time code.

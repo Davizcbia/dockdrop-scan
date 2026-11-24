@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="../style.css">
 <style>
   .scan-control {
-    corner-shape: round;
+    corner-shape: squircle;
     color: #fff;
     background: linear-gradient(155deg, rgba(255,255,255,0.22), transparent 58%),
       rgba(19,25,36,0.34);
@@ -20,8 +20,12 @@
       inset 0 -1px 2px rgba(255,255,255,0.24),
       inset 0 0 0 1px rgba(255,255,255,0.16), 0 6px 18px rgba(0,0,0,0.26);
   }
-  .top.scan-control { border-radius: 999px; }
-  .top.scan-control .sub { color: rgba(255,255,255,0.9); }
+  .top.scan-control { display: grid; place-items: center; min-height: 48px; border-radius: 999px; }
+  .top.scan-control .sub {
+    position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+    width: max-content; max-width: min(240px, 80vw); padding: 4px 10px; border-radius: 12px;
+    background: rgba(0,0,0,.64); color: rgba(255,255,255,.95);
+  }
   .close.scan-control {
     width: 44px;
     height: 44px;
@@ -46,23 +50,40 @@
   .result-text .metrics { display: block; margin-top: 8px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: rgba(255,255,255,0.6); white-space: pre-line; }
   #continuePair:not([hidden]) + #again { margin-top: 8px; }
   .transfer-mode {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 4px; margin-bottom: 14px;
-    border-radius: 16px; background: rgba(255,255,255,.07);
+    --segment-radius: 16px;
+    --segment-inset: 4px;
+    --segment-ease: cubic-bezier(.22, .75, .24, 1);
+    position: relative; isolation: isolate;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: var(--segment-inset); margin-bottom: 14px;
+    border-radius: var(--segment-radius); background: rgba(255,255,255,.07);
   }
+  .transfer-mode::before {
+    content: ''; position: absolute; z-index: -1; pointer-events: none;
+    inset: var(--segment-inset) auto var(--segment-inset) var(--segment-inset); width: calc((100% - 11px) / 2); border-radius: calc(var(--segment-radius) - var(--segment-inset));
+    background: rgba(255,255,255,.15); box-shadow: 0 1px 3px #0004;
+    transition: transform 320ms var(--segment-ease);
+  }
+  .transfer-mode[data-receive]::before { transform: translateX(calc(100% + 3px)); }
   .transfer-mode button {
-    min-height: 44px; border: 0; border-radius: 12px; background: transparent;
+    min-height: 44px; min-width: 0; padding: 4px; border: 0; border-radius: 12px; background: transparent;
     color: inherit; font: inherit; font-weight: 600; cursor: pointer;
   }
-  .transfer-mode button[aria-pressed="true"] { background: rgba(255,255,255,.15); box-shadow: 0 1px 3px #0004; }
   .transfer-mode button:focus-visible, .received a:focus-visible { outline: 2px solid #fff; }
-  .transfer-fields[hidden], .received[hidden] { display: none; }
-  .transfer-fields { display: grid; gap: 8px; margin: 0 0 16px; text-align: left; }
+  .transfer-fold { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 320ms cubic-bezier(.22, .75, .24, 1); }
+  .transfer-fold[inert] { grid-template-rows: 0fr; }
+  .transfer-fold-clip { min-height: 0; overflow: hidden; }
+  .transfer-fields { display: grid; gap: 8px; padding: 2px 2px 16px; text-align: left; transition: opacity 220ms ease; }
+  .transfer-fold[inert] .transfer-fields { opacity: 0; }
+  .received[hidden] { display: none; }
   .transfer-fields label { font-size: 13px; font-weight: 600; }
   .transfer-fields input, .transfer-fields textarea {
     min-width: 0; width: 100%; padding: 10px 12px; border-radius: 14px; color: inherit;
     border: 1px solid rgba(255,255,255,.20); background: rgba(255,255,255,.07); font: inherit;
   }
-  .transfer-fields textarea { resize: vertical; max-height: 160px; font-size: 16px; }
+  .transfer-fields textarea { resize: vertical; min-height: 88px; max-height: 160px; font-size: 16px; }
+  @media (prefers-reduced-motion: reduce) {
+    .transfer-mode::before, .transfer-fold, .transfer-fields { transition: none; }
+  }
   .transfer-fields input::file-selector-button {
     margin-inline-end: 8px; border: 0; border-radius: 9px; padding: 5px 8px;
     background: rgba(255,255,255,.16); color: inherit; font: inherit;
@@ -71,6 +92,11 @@
   .received a { color: inherit; display: block; padding: 10px 6px; text-align: left; overflow-wrap: anywhere; }
   .received textarea { width: 100%; padding: 10px; border-radius: 12px; background: #ffffff12; color: inherit; font: inherit; }
   .received .button { padding: 10px; margin: 6px 0; }
+  @supports (corner-shape: squircle) {
+    .transfer-mode, .transfer-mode::before, .transfer-mode button, .transfer-fields input,
+    .transfer-fields textarea, .received textarea, .button { corner-shape: squircle; }
+    .close.scan-control { corner-shape: round; }
+  }
 </style>
 </head>
 <body>
@@ -81,21 +107,20 @@
 <button class="close scan-control" id="close" aria-label="关闭相机" hidden><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
 <header class="top scan-control">
   <div class="title">DockDrop</div>
-  <div class="sub" id="hint">将光泡对准画面中央</div>
+  <div class="sub" id="hint" hidden></div>
 </header>
 
 <div class="start glass sheet show" id="start">
-  <div class="transfer-mode" role="group" aria-label="收发方向">
+  <div class="transfer-mode" id="transferMode" role="group" aria-label="收发方向">
     <button type="button" id="modeSend" aria-pressed="true">发送到电脑</button>
     <button type="button" id="modeReceive" aria-pressed="false">从电脑接收</button>
   </div>
-  <div class="start-text" id="startText">准备好内容，在电脑桌面或资源管理器右键选择 DockDrop，再扫描光泡。</div>
-  <div class="transfer-fields" id="transferFields">
+  <div class="transfer-fold" id="transferFields"><div class="transfer-fold-clip"><div class="transfer-fields">
     <label for="sendFiles">文件</label>
     <input id="sendFiles" type="file" multiple>
     <label for="sendText">文字</label>
-    <textarea id="sendText" rows="2" placeholder="输入或粘贴文字"></textarea>
-  </div>
+    <textarea id="sendText" rows="3" placeholder="输入或粘贴文字"></textarea>
+  </div></div></div>
   <button id="go" class="button">打开相机</button>
 </div>
 
@@ -109,6 +134,6 @@
 </div>
 
 <div class="status glass" id="status" hidden><span class="spinner" id="spinner"></span><span id="statusText"></span><button id="cancel" class="link" hidden>取消</button></div>
-<script type="module" src="scan.js?v=transfer2"></script>
+<script type="module" src="scan.js?v=mobile4"></script>
 </body>
 </html>

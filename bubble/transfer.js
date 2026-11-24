@@ -43,7 +43,7 @@ export async function sendTransfer(channel, { files, text }, progress) {
       clearInterval(repeat);
       pending = null;
       if (msg?.type === reply) resolve();
-      else reject(new Error(msg?.message || (retry ? '电脑还未准备好接收，请使用新版 DockOver。' : '接收中断，请重新扫描后重试。')));
+      else reject(new Error(msg?.message || (retry ? '电脑还未准备好接收，请更新 DockDrop。' : '接收中断，请重新扫描后重试。')));
     };
     function transmit() {
       try { send(); } catch { finish(null); }
@@ -158,6 +158,42 @@ export function installTransferReceiver(channel, write, enabled = () => true) {
     channel.removeEventListener('close', onClose);
     channel.removeEventListener('message', onMessage);
   };
+}
+
+// Install on an authenticated, ordered data channel. Each pairing serves one
+// direction. Storage and selection are supplied by the host platform.
+export function serveTransfer(channel, {readSelection, writeIncoming, onState = () => {}}) {
+  let direction = null;
+  const detach = installTransferReceiver(channel, async (message, bytes) => {
+    direction = 'receive';
+    await writeIncoming(message, bytes);
+  }, () => direction !== 'send');
+  async function pull({data}) {
+    if (data !== 'dockdrop-pull:1' || direction) return;
+    direction = 'send';
+    try {
+      channel.send('dockdrop-pull:accepted');
+      const payload = await readSelection();
+      if (!payload.files.length && !payload.text) {
+        channel.send('dockdrop-pull:empty');
+        return;
+      }
+      onState('out-start');
+      await sendTransfer(channel, payload, () => {});
+      onState('out-done');
+    } catch {
+      if (channel.readyState === 'open') channel.send('dockdrop-pull:failed');
+      onState('out-failed');
+    }
+  }
+  function dispose() {
+    detach();
+    channel.removeEventListener('message', pull);
+    channel.removeEventListener('close', dispose);
+  }
+  channel.addEventListener('message', pull);
+  channel.addEventListener('close', dispose);
+  return dispose;
 }
 
 export function receiveTransfer(channel, progress = () => {}) {

@@ -7,6 +7,7 @@ import { startCameraGlass } from './glass.js?v=glass1';
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const SIGNAL_URL = params.get('signal') || CONFIG_SIGNAL;
+const SHOW_METRICS = params.get('debug') === '1';
 const video = $('video'), focus = $('focus');
 const ALIGN_HINT = '将光泡对准画面中央';
 const worker = new Worker(new URL('./worker.js?v=fast1', import.meta.url), { type: 'module' });
@@ -224,7 +225,12 @@ function showResult(title, text, failed = false, metrics = '') {
   $('again').classList.remove('secondary');
   $('resultTitle').textContent = title;
   $('resultText').textContent = text;
-  if (metrics) { const m = document.createElement('span'); m.className = 'metrics'; m.textContent = metrics; $('resultText').appendChild(m); }
+  if (SHOW_METRICS && metrics) {
+    const details = document.createElement('span');
+    details.className = 'metrics';
+    details.textContent = metrics;
+    $('resultText').appendChild(details);
+  }
   const check = $('result').querySelector('.check');
   check.hidden = failed;
   const path = check.querySelector('path'); path.style.animation = 'none'; void path.getBoundingClientRect(); path.style.animation = '';

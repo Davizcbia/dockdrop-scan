@@ -1,5 +1,5 @@
 // Ray code (experiment, docky-bubble --code-rays): the 168 cells of a Bubble Code as faint beams of light from the
-// bubble's centre - 42 directions x 4 segments along the radius - each a little brighter (1) or darker (0) than the
+// bubble's centre - 28 directions x 6 segments along the radius - each a little brighter (1) or darker (0) than the
 // glass halfway to the next beam - and a thin, even edge highlight on the ball; no finder rings. The scanner
 //   1. finds the ball in every frame by its edge highlight (radial ridge search from several starting points, an
 //      ellipse through the ridge, then tracking from frame to frame);
@@ -10,11 +10,31 @@
 //      from the sync word, Reed-Solomon like any v1 code.
 import { RINGS, SYNC, _internals } from './bubble-code.js?v=r3';
 
-const { bitsToPayload, fitEllipse, ellipseRadiusRatio, bil, boost } = _internals;
+const { bitsToPayload, fitEllipse, ellipseRadiusRatio, bil } = _internals;
 export const RAYS = 28, SEG = [0.86, 0.78, 0.70, 0.62, 0.54, 0.46, 0.38];  // 28 wide beams x 6 segments
 const TOTAL = RINGS.reduce((a, r) => a + r.n, 0);
 if (TOTAL !== RAYS * (SEG.length - 1)) throw new Error('ray layout must hold the v1 cells');
 const RB = 40, R0 = 0.30, R1 = 0.94, AB = RAYS * 8;  // the polar picture: radius bins x angle bins (8 per beam)
+const HALF = Math.PI / RAYS, COS_HALF = Math.cos(HALF), SIN_HALF = Math.sin(HALF);
+const POLAR_COS = Float64Array.from({ length: AB }, (_, i) => Math.cos(2 * Math.PI * (i + 0.5) / AB));
+const POLAR_SIN = Float64Array.from({ length: AB }, (_, i) => Math.sin(2 * Math.PI * (i + 0.5) / AB));
+
+// Hoist the fixed Lorentz boost coefficients out of the inner sampling loop.
+function perspectiveSampler(polar, vx, vy) {
+  const v2 = vx * vx + vy * vy;
+  if (v2 < 1e-12) return polar;
+  const g = 1 / Math.sqrt(1 - v2), gain = (g - 1) / v2;
+  return (x, y) => {
+    const dot = vx * x + vy * y, w = g * (1 + dot), k = gain * dot + g;
+    return polar((x + k * vx) / w, (y + k * vy) / w);
+  };
+}
+
+function beamDifference(at, r, c, s) {
+  return at(r * c, r * s) - 0.5 * (
+    at(r * (c * COS_HALF + s * SIN_HALF), r * (s * COS_HALF - c * SIN_HALF)) +
+    at(r * (c * COS_HALF - s * SIN_HALF), r * (s * COS_HALF + c * SIN_HALF)));
+}
 
 // ---- 1. finding the ball ------------------------------------------------------------------------------------------
 const ellipseRange = (e, lo, hi) => (a) => { const da = a - e.theta, rho = 1 / Math.hypot(Math.cos(da) / e.a, Math.sin(da) / e.b); return [rho * lo, rho * hi]; };
@@ -105,7 +125,7 @@ export class RayAccumulator {
     for (let ri = 0; ri < RB; ri++) {
       const rho = R0 + (ri + 0.5) * (R1 - R0) / RB;
       for (let ai = 0; ai < AB; ai++) {
-        const phi = 2 * Math.PI * (ai + 0.5) / AB, yx = rho * Math.cos(phi), yy = rho * Math.sin(phi);
+        const yx = rho * POLAR_COS[ai], yy = rho * POLAR_SIN[ai];
         this.sum[ri * AB + ai] += bil(img, e.cx + m11 * yx + m12 * yy, e.cy + m12 * yx + m22 * yy);
       }
     }
@@ -125,15 +145,14 @@ export class RayAccumulator {
       const a0 = ((ia % AB) + AB) % AB, a1 = (a0 + 1) % AB;
       return (P[ir * AB + a0] * (1 - wa) + P[ir * AB + a1] * wa) * (1 - wr) + (P[(ir + 1) * AB + a0] * (1 - wa) + P[(ir + 1) * AB + a1] * wa) * wr;
     };
-    const half = Math.PI / RAYS;
     const makeVal = (vx, vy) => {
-      const at = (r, t) => { const [x, y] = boost(vx, vy, r * Math.cos(t), r * Math.sin(t)); return polar(x, y); };
+      const at = perspectiveSampler(polar, vx, vy);
       // one cell: the beam against halfway to its neighbours, at 4 radii of its segment
       return (idx, t0, mir) => {
         const k = Math.floor(idx / RAYS), j = idx % RAYS, t = t0 + (mir ? -1 : 1) * 2 * Math.PI * (j + 0.5) / RAYS;
-        const lo = SEG[k + 1] + 0.015, hi = SEG[k] - 0.015;
+        const lo = SEG[k + 1] + 0.015, hi = SEG[k] - 0.015, c = Math.cos(t), s = Math.sin(t);
         let d = 0;
-        for (let q = 0; q < 4; q++) { const r = lo + (hi - lo) * q / 3; d += at(r, t) - 0.5 * (at(r, t - half) + at(r, t + half)); }
+        for (let q = 0; q < 4; q++) d += beamDifference(at, lo + (hi - lo) * q / 3, c, s);
         return d / 4;
       };
     };
@@ -164,13 +183,13 @@ export class RayAccumulator {
       return best;
     };
     const stripes = (vx, vy) => {  // radial-stripe energy at every angle (works when the picture is smooth)
+      const at = perspectiveSampler(polar, vx, vy);
       let E = 0;
       for (let k = 0; k < SEG.length - 1; k++) for (let q = 0; q < 3; q++) {
         const r = SEG[k + 1] + 0.03 + (SEG[k] - SEG[k + 1] - 0.06) * q / 2;
         for (let i = 0; i < AB; i += 2) {
           const t = 2 * Math.PI * i / AB;
-          const f = (tt) => { const [x, y] = boost(vx, vy, r * Math.cos(tt), r * Math.sin(tt)); return polar(x, y); };
-          const d = f(t) - 0.5 * (f(t - half) + f(t + half));
+          const d = beamDifference(at, r, Math.cos(t), Math.sin(t));
           E += d * d;
         }
       }
@@ -184,9 +203,8 @@ export class RayAccumulator {
       for (const c0 of coarse.slice(0, 2)) for (let iy = -4; iy <= 4; iy++) for (let ix = -4; ix <= 4; ix++) { const vx = c0.vx + ix * 0.004, vy = c0.vy + iy * 0.004; fine.push({ vx, vy, E: measure(vx, vy) }); }
       return fine.sort((a, b) => b.E - a.E).slice(0, 2);
     };
-    const ranked = [...search(energy), ...search(stripes)].map(({ vx, vy }) => ({ vx, vy, val: makeVal(vx, vy) }));
-    for (const pv of ranked) {
-      const cands = syncBest(pv.val, 1), tried = [];
+    const tryPerspective = (vx, vy) => {
+      const val = makeVal(vx, vy), cands = syncBest(val, 1), tried = [];
       for (const c of cands) {
         if (tried.length >= 4) break;
         if (tried.some((p) => p.mir === c.mir && Math.abs(((c.t0 - p.t0) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI) < 0.6 * 2 * Math.PI / RAYS)) continue;
@@ -194,15 +212,26 @@ export class RayAccumulator {
         for (const dl of [0, -0.5, 0.5]) {
           const t0 = c.t0 + dl * 2 * Math.PI / AB;
           const bits = [], conf = [];
-          for (let i = SYNC.length; i < TOTAL; i++) { const v = pv.val(i, t0, c.mir); bits.push(v > 0 ? 1 : 0); conf.push(Math.abs(v)); }
+          for (let i = SYNC.length; i < TOTAL; i++) { const v = val(i, t0, c.mir); bits.push(v > 0 ? 1 : 0); conf.push(Math.abs(v)); }
           let p = bitsToPayload(bits);
           if (!p && tried.length === 1 && dl === 0) {
             const weak = conf.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]).slice(0, 4).map((x) => x[1]);
             for (let mm = 1; mm < 16 && !p; mm++) { const b2 = bits.slice(); for (let q = 0; q < 4; q++) if (mm & (1 << q)) b2[weak[q]] ^= 1; p = bitsToPayload(b2); }
           }
-          if (p) return { ok: true, ...p, mirrored: !!c.mir, frames: this.frames, perspective: [pv.vx, pv.vy] };
+          if (p) return { ok: true, ...p, mirrored: !!c.mir, frames: this.frames, perspective: [vx, vy] };
         }
       }
+      return null;
+    };
+    // A near-round finder often needs no projective correction. Keep the
+    // full perspective search for captures that fail the first attempt.
+    if (this.prev && Math.min(this.prev.a, this.prev.b) / Math.max(this.prev.a, this.prev.b) > 0.94) {
+      const result = tryPerspective(0, 0);
+      if (result) return result;
+    }
+    for (const { vx, vy } of [...search(energy), ...search(stripes)]) {
+      const result = tryPerspective(vx, vy);
+      if (result) return result;
     }
     return { ok: false, stage: 'unreadable', frames: this.frames };
   }

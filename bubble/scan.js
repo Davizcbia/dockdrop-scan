@@ -9,10 +9,11 @@ const params = new URLSearchParams(location.search);
 const SIGNAL_URL = params.get('signal') || CONFIG_SIGNAL;
 const video = $('video'), focus = $('focus');
 const ALIGN_HINT = '将光泡对准画面中央';
-const worker = new Worker(new URL('./worker.js?v=r3', import.meta.url), { type: 'module' });
-const grab = document.createElement('canvas');
-const gctx = grab.getContext('2d', { willReadFrequently: true });
+const worker = new Worker(new URL('./worker.js?v=fast1', import.meta.url), { type: 'module' });
 const SIZE = 400;  // decoded square (px)
+const grab = document.createElement('canvas');
+grab.width = grab.height = SIZE;
+const gctx = grab.getContext('2d', { willReadFrequently: true });
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // ?mode=rays: the faint ray code on the liquid-glass ball (frames added up); default: Bubble Code v1
 const MODE = params.get('mode') === 'rays' ? 'rays' : 'v1';
@@ -51,7 +52,6 @@ function crop(zoom) {
 }
 function grabFrame(zoom) {
   const c = crop(zoom);
-  grab.width = SIZE; grab.height = SIZE;
   gctx.fillStyle = '#000'; gctx.fillRect(0, 0, SIZE, SIZE);
   gctx.drawImage(video, c.x, c.y, c.side, c.side, 0, 0, SIZE, SIZE);
   const d = gctx.getImageData(0, 0, SIZE, SIZE).data, gray = new Float32Array(SIZE * SIZE);

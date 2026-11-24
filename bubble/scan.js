@@ -3,7 +3,7 @@
 import { SIGNAL_URL as CONFIG_SIGNAL } from '../config.js';
 import { pair } from '../pair.js';
 import { startCameraGlass } from './glass.js?v=glass1';
-import { receiveTransfer, sendTransfer, validateTransfer } from './transfer.js?v=transfer2';
+import { receiveTransfer, sendTransfer, validateTransfer } from './transfer.js?v=transfer3';
 import { contentsLabel, locale, t, transferError } from './locale.js?v=mobile4';
 
 const $ = (id) => document.getElementById(id);

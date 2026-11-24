@@ -26,8 +26,12 @@ export function validateTransfer(files, text) {
   }
 }
 
-export async function sendTransfer(channel, { files, text }, progress) {
+export async function sendTransfer(channel, { files, text }, progress, reportProgress = () => {}) {
   validateTransfer(files, text);
+  const total = files.reduce((bytes, file) => bytes + file.size, 0);
+  const work = total + files.length + Number(Boolean(text));
+  let completed = 0;
+  const advance = (amount) => reportProgress((completed += amount) / work);
   let pending = null;
   function receive(event) {
     const msg = parse(event.data);
@@ -54,7 +58,8 @@ export async function sendTransfer(channel, { files, text }, progress) {
     transmit();
   });
   try {
-    await wait('ready', () => control(channel, 'hello'), true);
+    await wait('ready', () => control(channel, 'hello', { work }), true);
+    if (work) reportProgress(0);
     if (text.length <= 4096) {
       if (text) await wait('ack', () => control(channel, 'text', { text }));
     } else {
@@ -63,7 +68,7 @@ export async function sendTransfer(channel, { files, text }, progress) {
         await wait('ack', () => control(channel, 'text-piece', {text: part, last: offset + part.length === text.length}));
       }
     }
-    const total = files.reduce((n, file) => n + file.size, 0);
+    if (text) advance(1);
     let sent = 0;
     for (const file of files) {
       progress(sent, total, file.name);
@@ -72,9 +77,11 @@ export async function sendTransfer(channel, { files, text }, progress) {
         const bytes = await file.slice(offset, offset + CHUNK).arrayBuffer();
         await wait('ack', () => channel.send(bytes));
         sent += bytes.byteLength;
+        advance(bytes.byteLength);
         progress(sent, total, file.name);
       }
       await wait('ack', () => control(channel, 'finish'));
+      advance(1);
     }
     await wait('ack', () => control(channel, 'done'));
   } catch (error) {
@@ -88,9 +95,13 @@ export async function sendTransfer(channel, { files, text }, progress) {
   }
 }
 
-export function installTransferReceiver(channel, write, enabled = () => true) {
+export function installTransferReceiver(channel, write, enabled = () => true, reportProgress = () => {}) {
   channel.binaryType = 'arraybuffer';
   let openFile = false, sealed = false, busy = false, textParts = '';
+  let work = null, completed = 0;
+  const advance = (amount) => {
+    if (work) reportProgress(Math.min((completed += amount) / work, 1));
+  };
   function onClose() {
     if (openFile && !busy) {
       openFile = false;
@@ -102,6 +113,10 @@ export function installTransferReceiver(channel, write, enabled = () => true) {
     const msg = parse(data);
     if (busy || sealed || (!msg && !(data instanceof ArrayBuffer))) return;
     if (msg?.type === 'hello') {
+      if (work === null) {
+        work = Number.isSafeInteger(msg.work) && msg.work > 0 ? msg.work : 0;
+        if (work) reportProgress(0);
+      }
       control(channel, 'ready');
       return;
     }
@@ -109,22 +124,26 @@ export function installTransferReceiver(channel, write, enabled = () => true) {
     try {
       if (data instanceof ArrayBuffer && openFile && data.byteLength > 0 && data.byteLength <= CHUNK) {
         await write('receive-data', data);
+        advance(data.byteLength);
       } else if (msg?.type === 'begin' && !openFile && typeof msg.name === 'string' && msg.name.length <= 255
         && Number.isSafeInteger(msg.size) && msg.size >= 0 && msg.size <= MAX_FILE) {
         await write(`receive-begin:${msg.size}:${msg.name}`);
         openFile = true;
       } else if (msg?.type === 'finish' && openFile) {
         await write('receive-finish');
+        advance(1);
         openFile = false;
       } else if (msg?.type === 'text' && !openFile && typeof msg.text === 'string') {
         validateTransfer([], msg.text);
         await write('receive-text:' + msg.text);
+        advance(1);
       } else if (msg?.type === 'text-piece' && !openFile && typeof msg.text === 'string' && msg.text.length > 0
           && msg.text.length <= 4096 && typeof msg.last === 'boolean' && textParts.length + msg.text.length <= MAX_TEXT) {
         textParts += msg.text;
         if (msg.last) {
           validateTransfer([], textParts);
           await write('receive-text:' + textParts);
+          advance(1);
           textParts = '';
         }
       } else if (msg?.type === 'done' && !openFile && !textParts) {
@@ -162,12 +181,15 @@ export function installTransferReceiver(channel, write, enabled = () => true) {
 
 // Install on an authenticated, ordered data channel. Each pairing serves one
 // direction. Storage and selection are supplied by the host platform.
-export function serveTransfer(channel, {readSelection, writeIncoming, onState = () => {}}) {
+export function serveTransfer(channel, {readSelection, writeIncoming, onState = () => {}, onProgress = () => {}}) {
   let direction = null;
   const detach = installTransferReceiver(channel, async (message, bytes) => {
     direction = 'receive';
     await writeIncoming(message, bytes);
-  }, () => direction !== 'send');
+  }, () => direction !== 'send', (fraction) => {
+    direction = 'receive';
+    onProgress(fraction);
+  });
   async function pull({data}) {
     if (data !== 'dockdrop-pull:1' || direction) return;
     direction = 'send';
@@ -179,7 +201,7 @@ export function serveTransfer(channel, {readSelection, writeIncoming, onState = 
         return;
       }
       onState('out-start');
-      await sendTransfer(channel, payload, () => {});
+      await sendTransfer(channel, payload, () => {}, onProgress);
       onState('out-done');
     } catch {
       if (channel.readyState === 'open') channel.send('dockdrop-pull:failed');

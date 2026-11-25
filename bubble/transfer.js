@@ -26,7 +26,7 @@ export function validateTransfer(files, text) {
   }
 }
 
-export async function sendTransfer(channel, { files, text }, progress, reportProgress = () => {}) {
+export async function sendTransfer(channel, { files, text }, progress, reportProgress = () => {}, readyTimeout = 4000) {
   validateTransfer(files, text);
   const total = files.reduce((bytes, file) => bytes + file.size, 0);
   const work = total + files.length + Number(Boolean(text));
@@ -52,7 +52,7 @@ export async function sendTransfer(channel, { files, text }, progress, reportPro
     function transmit() {
       try { send(); } catch { finish(null); }
     }
-    const timeout = setTimeout(() => finish(null), retry ? 4000 : 15000);
+    const timeout = setTimeout(() => finish(null), retry ? readyTimeout : 15000);
     const repeat = retry ? setInterval(transmit, 300) : null;
     pending = { reply, finish };
     transmit();
@@ -95,7 +95,7 @@ export async function sendTransfer(channel, { files, text }, progress, reportPro
   }
 }
 
-export function installTransferReceiver(channel, write, enabled = () => true, reportProgress = () => {}) {
+export function installTransferReceiver(channel, write, enabled = () => true, reportProgress = () => {}, authorize = async () => {}) {
   channel.binaryType = 'arraybuffer';
   let openFile = false, sealed = false, busy = false, textParts = '';
   let work = null, completed = 0;
@@ -114,12 +114,21 @@ export function installTransferReceiver(channel, write, enabled = () => true, re
     if (busy || sealed || (!msg && !(data instanceof ArrayBuffer))) return;
     if (msg?.type === 'hello') {
       if (work === null) {
+        busy = true;
+        try { await authorize(); }
+        catch {
+          sealed = true;
+          if (channel.readyState === 'open') control(channel, 'error', {message: '电脑没有接受这次传输。'});
+          return;
+        } finally { busy = false; }
+        if (channel.readyState !== 'open') return;
         work = Number.isSafeInteger(msg.work) && msg.work > 0 ? msg.work : 0;
         if (work) reportProgress(0);
       }
       control(channel, 'ready');
       return;
     }
+    if (work === null) return;
     busy = true;
     try {
       if (data instanceof ArrayBuffer && openFile && data.byteLength > 0 && data.byteLength <= CHUNK) {
@@ -181,7 +190,7 @@ export function installTransferReceiver(channel, write, enabled = () => true, re
 
 // Install on an authenticated, ordered data channel. Each pairing serves one
 // direction. Storage and selection are supplied by the host platform.
-export function serveTransfer(channel, {readSelection, writeIncoming, onState = () => {}, onProgress = () => {}}) {
+export function serveTransfer(channel, {readSelection, writeIncoming, authorize, onState = () => {}, onProgress = () => {}}) {
   let direction = null;
   const detach = installTransferReceiver(channel, async (message, bytes) => {
     direction = 'receive';
@@ -189,6 +198,9 @@ export function serveTransfer(channel, {readSelection, writeIncoming, onState = 
   }, () => direction !== 'send', (fraction) => {
     direction = 'receive';
     onProgress(fraction);
+  }, async () => {
+    direction = 'receive';
+    await authorize?.();
   });
   async function pull({data}) {
     if (data !== 'dockdrop-pull:1' || direction) return;
@@ -218,7 +230,7 @@ export function serveTransfer(channel, {readSelection, writeIncoming, onState = 
   return dispose;
 }
 
-export function receiveTransfer(channel, progress = () => {}) {
+export function receiveTransfer(channel, progress = () => {}, readyTimeout = 20000) {
   const maxBatch = 128 * 1024 ** 2;
   return new Promise((resolve, reject) => {
     const files = [];
@@ -278,7 +290,7 @@ export function receiveTransfer(channel, progress = () => {}) {
       if (data === 'dockdrop-pull:accepted') {
         accepted = true;
         clearInterval(retry);
-        resetDeadline(20000, '电脑准备发送超时。');
+        resetDeadline(readyTimeout, '电脑准备发送超时。');
       } else if (data === 'dockdrop-pull:empty') {
         finish({files, text});
       } else if (data === 'dockdrop-pull:failed') {

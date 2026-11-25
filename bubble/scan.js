@@ -1,14 +1,17 @@
 // Optical Bubble scanner (Phase 1: does the code scan on real phones?). The camera decodes in a worker, then uses the shared pairing protocol (../pair.js). Also the QR fallback: the phone's own camera app opens
 // this page with #s=<secret>, and it pairs straight away.
 import { SIGNAL_URL as CONFIG_SIGNAL } from '../config.js';
-import { pair } from '../pair.js';
+import { pair } from '../pair.js?v=remember1';
 import { startCameraGlass } from './glass.js?v=glass1';
-import { receiveTransfer, sendTransfer, validateTransfer } from './transfer.js?v=transfer3';
-import { contentsLabel, locale, t, transferError } from './locale.js?v=mobile4';
+import { receiveTransfer, sendTransfer, validateTransfer } from './transfer.js?v=remember1';
+import { contentsLabel, locale, t, transferError } from './locale.js?v=remember1';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const SIGNAL_URL = params.get('signal') || CONFIG_SIGNAL;
+const TRUST_STORE = 'dockdrop.trustedComputers.v1';
+const TRUST_CAPABILITY = 'remember-phone-v1';
+const saveAllowed = !params.has('signal');
 const SHOW_METRICS = params.get('debug') === '1';
 const video = $('video'), focus = $('focus');
 const worker = new Worker(new URL('./worker.js?v=early1', import.meta.url), { type: 'module' });
@@ -33,6 +36,96 @@ const downloadUrls = [];
 // statistics for this camera session
 let st = null;
 const newStats = () => ({ t0: performance.now(), firstFrame: 0, firstLock: 0, frames: 0, decoded: 0, found: 0, ok: 0, msSum: 0, last: null, zoom: 1, reads: [] });
+
+function validComputer(value) {
+  return value && /^[a-f0-9]{32}$/.test(value.id) && /^[a-f0-9]{64}$/.test(value.secret)
+    && typeof value.name === 'string' && value.name.length > 0 && value.name.length <= 64;
+}
+function savedComputers() {
+  if (!saveAllowed) return [];
+  try {
+    const entries = JSON.parse(localStorage.getItem(TRUST_STORE));
+    return Array.isArray(entries) ? entries.filter(validComputer).slice(0, 12) : [];
+  } catch { return []; }
+}
+function saveComputers(entries) {
+  try {
+    localStorage.setItem(TRUST_STORE, JSON.stringify(entries.slice(0, 12)));
+    renderSavedComputers();
+    return true;
+  } catch {
+    return false;
+  }
+}
+function rememberComputer(connection, signal) {
+  return new Promise((resolve) => {
+    const {channel} = connection;
+    let retry, timeout;
+    function finish(value) {
+      clearInterval(retry);
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', stop);
+      channel.removeEventListener('message', receive);
+      channel.removeEventListener('close', stop);
+      resolve(value);
+    }
+    function stop() { finish(null); }
+    function receive({data}) {
+      if (data === 'dockdrop-remember:error') return stop();
+      const prefix = 'dockdrop-remember:ok:';
+      if (typeof data !== 'string' || !data.startsWith(prefix)) return;
+      try {
+        const value = JSON.parse(data.slice(prefix.length));
+        finish(validComputer(value) ? value : null);
+      } catch { stop(); }
+    }
+    function request() {
+      if (channel.readyState !== 'open') return stop();
+      channel.send('dockdrop-remember:request');
+    }
+    if (signal.aborted) return stop();
+    signal.addEventListener('abort', stop, {once: true});
+    channel.addEventListener('close', stop);
+    channel.addEventListener('message', receive);
+    retry = setInterval(request, 350);
+    timeout = setTimeout(stop, 6500);
+    request();
+  });
+}
+function renderSavedComputers() {
+  const list = $('savedList');
+  list.replaceChildren();
+  const computers = savedComputers();
+  $('savedDevices').hidden = scanOnly || !computers.length;
+  for (const computer of computers) {
+    const row = document.createElement('div');
+    row.className = 'saved-device';
+    const connectButton = document.createElement('button');
+    connectButton.type = 'button';
+    connectButton.className = 'button secondary';
+    connectButton.textContent = computer.name;
+    connectButton.onclick = async () => {
+      if (pairing || $('go').disabled) return;
+      if (!prepareDraft()) return;
+      $('go').disabled = true;
+      await hideSheet($('start'));
+      $('go').disabled = false;
+      await connect({secret: computer.secret, computer}, '');
+    };
+    const forget = document.createElement('button');
+    forget.type = 'button';
+    forget.className = 'link';
+    forget.textContent = t('移除');
+    forget.setAttribute('aria-label', t('移除 {device}', {device: computer.name}));
+    forget.onclick = () => {
+      if (!confirm(t('移除这台电脑？下次连接需要重新扫码。'))) return;
+      if (!saveComputers(savedComputers().filter(item => item.id !== computer.id)))
+        status('无法保存设备设置。');
+    };
+    row.append(connectButton, forget);
+    list.append(row);
+  }
+}
 
 function status(text, { spin = false, cancel = false } = {}) {
   $('statusText').textContent = text ? t(text) : '';
@@ -144,12 +237,17 @@ function loop() {
   else cameraFrame = requestAnimationFrame(loop);
 }
 
+function prepareDraft() {
+  draft = receiveMode ? {files: [], text: ''} : {files: [...$('sendFiles').files], text: $('sendText').value};
+  try { validateTransfer(draft.files, draft.text); }
+  catch (error) { status(transferError(error.message)); return false; }
+  return true;
+}
+
 async function startCamera() {
   const button = $('go');
   if (button.disabled || stream) return;
-  draft = receiveMode ? { files: [], text: '' } : { files: [...$('sendFiles').files], text: $('sendText').value };
-  try { validateTransfer(draft.files, draft.text); }
-  catch (error) { status(transferError(error.message)); return; }
+  if (!prepareDraft()) return;
   if (!window.isSecureContext || !navigator.mediaDevices) { status('相机需要 HTTPS 页面'); return; }
   button.disabled = true;
   status('正在打开相机…', { spin: true });
@@ -219,6 +317,7 @@ async function backToStart() {
   $('close').hidden = true;
   await hideSheet($('result'));
   clearReceived();
+  renderSavedComputers();
   hint();
   showSheet($('start'));
 }
@@ -262,34 +361,50 @@ async function found(r) {
 }
 
 async function connect(r, metrics) {
-  hint('已识别，正在配对');
+  const remembered = Boolean(r.computer);
+  hint(remembered ? '正在连接…' : '已识别，正在配对');
   const ctl = new AbortController(); pairing = ctl;
   const t0 = performance.now();
   try {
     const name = /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document ? 'iPad' : t(/Android/.test(navigator.userAgent) ? 'Android 手机' : '浏览器');
     status('正在连接…', { spin: true, cancel: true });
-    const res = await pair({ signalUrl: SIGNAL_URL, secret: r.secret, role: 'guest', name, signal: ctl.signal, onStatus: (t) => status(t, { spin: true, cancel: true }) });
+    const res = await pair({signalUrl: SIGNAL_URL, secret: r.secret, role: 'guest', name, remembered,
+      signal: ctl.signal, onStatus: (text) => status(text, {spin: true, cancel: true})});
+    let trustStatus = '';
+    if (!remembered && saveAllowed && res.peerCapabilities.includes(TRUST_CAPABILITY)
+        && confirm(t('记住这台电脑？下次无需扫码。'))) {
+      status('正在保存这台电脑…', {spin: true, cancel: true});
+      const computer = await rememberComputer(res, ctl.signal);
+      const saved = computer && saveComputers([computer, ...savedComputers().filter(item => item.id !== computer.id)]);
+      trustStatus = saved ? '已记住这台电脑。' : '无法记住这台电脑，本次连接仍可使用。';
+    }
+    if (ctl.signal.aborted) {
+      res.pc.close();
+      return;
+    }
     pairing = null; status(''); $('close').hidden = true;
     const details = metrics + '\n' + t('握手 {time} s', {time: ((performance.now() - t0) / 1000).toFixed(2)});
     if (draft.files.length || draft.text) {
-      await transmit(res, details);
+      await transmit(res, details, remembered, trustStatus);
       return;
     }
-    if (receiveMode && await acceptDesktopTransfer(res, details, r.via === 'qr-app')) return;
+    if (receiveMode && await acceptDesktopTransfer(res, details, r.via === 'qr-app', remembered, trustStatus)) return;
     hint('已连接');
     if (navigator.vibrate) navigator.vibrate([12, 60, 12]);
-    showResult('已连接', t('已和 {device} 配对。', {device: t(res.peerName || '电脑')}), false, details);
+    showResult('已连接', t('已和 {device} 连接。', {device: t(res.peerName || '电脑')}) + (trustStatus ? '\n' + t(trustStatus) : ''), false, details);
     window.dockdropLink = res;
   } catch (e) {
     pairing = null;
     if (e.message === 'cancelled') return;
     status(''); $('close').hidden = true;
-    const [title, text] = ERRORS[e.message] || ['没能连接', '请确认手机和电脑连着同一个网络，然后再试一次。'];
+    const [title, text] = remembered
+      ? ['没能连接', '请在电脑上打开 DockDrop。如果这台手机已被移除，请重新扫码。']
+      : ERRORS[e.message] || ['没能连接', '请确认手机和电脑连着同一个网络，然后再试一次。'];
     showResult(title, text, true, metrics);
   }
 }
 
-async function transmit(connection, metrics) {
+async function transmit(connection, metrics, remembered, trustStatus) {
   activeTransfer = connection;
   const payload = draft;
   hint('正在发送');
@@ -298,13 +413,14 @@ async function transmit(connection, metrics) {
     await sendTransfer(connection.channel, payload, (bytes, total, name) => {
       const progress = total ? ` · ${Math.floor(100 * bytes / total)}%` : '';
       status(t('正在发送 {name}{progress}', {name, progress}), { spin: true, cancel: true });
-    });
+    }, () => {}, remembered ? 45000 : 4000);
     if (activeTransfer !== connection) return;
     $('sendFiles').value = '';
     $('sendText').value = '';
     draft = { files: [], text: '' };
     hint('已发送');
-    showResult('已发送', t('电脑已接收{contents}。', {contents: contentsLabel(payload.files.length, Boolean(payload.text))}), false, metrics);
+    const receipt = t('电脑已接收{contents}。', {contents: contentsLabel(payload.files.length, Boolean(payload.text))});
+    showResult('已发送', receipt + (trustStatus ? '\n' + t(trustStatus) : ''), false, metrics);
     window.dockdropLink = connection;
   } catch (error) {
     if (activeTransfer !== connection) return;
@@ -356,7 +472,7 @@ function showReceived(files, text) {
   panel.hidden = false;
 }
 
-async function acceptDesktopTransfer(connection, metrics, fromQr) {
+async function acceptDesktopTransfer(connection, metrics, fromQr, remembered, trustStatus) {
   activeTransfer = connection;
   hint('等待电脑发送');
   status('正在检查电脑要发送的内容…', { spin: true, cancel: true });
@@ -364,7 +480,7 @@ async function acceptDesktopTransfer(connection, metrics, fromQr) {
     const result = await receiveTransfer(connection.channel, (name, received, size) => {
       const progress = size ? ` · ${Math.floor(100 * received / size)}%` : '';
       status(t('正在接收 {name}{progress}', {name, progress}), { spin: true, cancel: true });
-    });
+    }, remembered ? 45000 : 20000);
     if (activeTransfer !== connection) return true;
     if (!result) {
       if (fromQr) return false;
@@ -376,12 +492,12 @@ async function acceptDesktopTransfer(connection, metrics, fromQr) {
     if (!files.length && !text) {
       if (fromQr) return false;
       hint('没有待发送内容');
-      showResult('没有待发送内容', '请在电脑上重新打开 DockDrop，先选文件或加入剪贴板文字，再扫码。', true, metrics);
+      showResult('没有待发送内容', '请先在电脑端选文件或加入剪贴板文字，再连接。', true, metrics);
       connection.pc.close();
       return true;
     }
     hint('已接收');
-    showResult('已接收', t('收到{contents}。', {contents: contentsLabel(files.length, Boolean(text))}), false, metrics);
+    showResult('已接收', t('收到{contents}。', {contents: contentsLabel(files.length, Boolean(text))}) + (trustStatus ? '\n' + t(trustStatus) : ''), false, metrics);
     showReceived(files, text);
     window.dockdropLink = connection;
     return true;
@@ -450,7 +566,7 @@ $('continuePair').onclick = async () => {
 document.documentElement.lang = locale;
 document.title = t(document.title);
 for (const selector of ['#modeSend', '#modeReceive', 'label[for="sendFiles"]', 'label[for="sendText"]',
-  '#go', '#resultTitle', '#continuePair', '#again', '#cancel']) {
+  '#go', '#savedTitle', '#resultTitle', '#continuePair', '#again', '#cancel']) {
   const el = document.querySelector(selector);
   el.textContent = t(el.textContent);
 }
@@ -460,6 +576,7 @@ for (const id of ['transferMode', 'close']) {
 }
 $('sendText').placeholder = t($('sendText').placeholder);
 hint(scanOnly ? '只读码' : '');
+renderSavedComputers();
 
 // QR fallback: opened by the phone's camera app with the secret in the fragment (never sent to any server). Pair at once
 // and drop the fragment, so a reload does not reuse the one-time code.

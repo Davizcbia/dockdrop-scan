@@ -55,6 +55,11 @@
     }
   }
   .result-text .metrics { display: block; margin-top: 8px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: rgba(255,255,255,0.6); white-space: pre-line; }
+  #savedDevices:not([hidden]) { display: grid; gap: 8px; margin-bottom: 12px; }
+  #savedDevices h2 { margin: 0; font-size: .88rem; font-weight: 600; }
+  #savedDevices .saved-device { display: flex; gap: 8px; align-items: center; }
+  #savedDevices .saved-device .button { flex: 1; min-width: 0; text-overflow: ellipsis; overflow: hidden; }
+  #savedDevices .saved-device .link { flex: none; }
   #continuePair:not([hidden]) + #again { margin-top: 8px; }
   .transfer-mode {
     --segment-radius: 16px;
@@ -133,6 +138,10 @@
     <button type="button" id="modeSend" aria-pressed="true">发送到电脑</button>
     <button type="button" id="modeReceive" aria-pressed="false">从电脑接收</button>
   </div>
+  <section id="savedDevices" aria-labelledby="savedTitle" hidden>
+    <h2 id="savedTitle">已记住的电脑</h2>
+    <div id="savedList"></div>
+  </section>
   <button id="go" class="button">打开相机</button>
 </div>
 
@@ -146,6 +155,6 @@
 </div>
 
 <div class="status glass" id="status" hidden><span class="spinner" id="spinner"></span><span id="statusText"></span><button id="cancel" class="link" hidden>取消</button></div>
-<script type="module" src="scan.js?v=fold-up1"></script>
+<script type="module" src="scan.js?v=remember1"></script>
 </body>
 </html>

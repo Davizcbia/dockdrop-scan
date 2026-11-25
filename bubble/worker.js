@@ -8,15 +8,28 @@
 import { decode } from './bubble-code.js?v=r3';
 import { RayAccumulator } from './rays.js?v=early1';
 
-let acc = null, misses = 0;
+let acc = null, misses = 0, patternTick = 0;
 const now = () => performance.now();
 
 self.onmessage = (e) => {
-  if (e.data.reset) { acc = null; misses = 0; return; }
+  if (e.data.reset) { acc = null; misses = 0; patternTick = 0; return; }
   const { id, w, h, gray, mode } = e.data;
   const t0 = now();
   const img = { w, h, v: gray };
   if (mode === 'rays') {
+    // Sample the static fallback on the same camera stream as the primary rays.
+    if (patternTick++ % 5 === 0) {
+      const ring = decode(img);
+      if (ring.ok) {
+        acc = null; misses = 0;
+        const el = ring.ellipse || ring.e;
+        self.postMessage({ id, ok: true, pattern: 'rings', frames: 1, ms: now()-t0,
+          secret: ring.secret.toString(16).padStart(16, '0'), flags: ring.flags,
+          corrected: ring.corrected, mirrored: ring.mirrored, contrast: ring.contrast,
+          ellipse: el && { cx: el.cx, cy: el.cy, a: el.a, b: el.b, theta: el.theta } });
+        return;
+      }
+    }
     if (!acc) acc = new RayAccumulator();
     const found = acc.add(img);
     misses = found ? 0 : misses + 1;

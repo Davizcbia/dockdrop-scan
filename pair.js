@@ -34,7 +34,7 @@ async function hmac(secretHex, remembered, text) {
 //   'no peer' (nobody on the other side within peerWaitMs: the computer's pairing window is closed or its code changed),
 //   'timeout', 'signalling unreachable', 'authentication failed', 'cancelled', 'room busy', or a WebRTC error.
 export async function pair(opts) {
-  const { signalUrl, secret, role, remembered = false, capabilities = [], name = 'DockOver', onStatus = () => {}, timeoutMs = 30000, peerWaitMs = 12000, signal } = opts;
+  const { signalUrl, secret, role, remembered = false, capabilities = [], name = 'DockOver', onStatus = () => {}, timeoutMs = 30000, peerWaitMs = 12000, keepAliveMs = 0, signal } = opts;
   const room = await roomFor(secret, remembered);
   if (signal?.aborted) throw new Error('cancelled');
   const authContext = remembered ? 'dockdrop-remember-auth-v1' : 'dockdrop-auth-v1';
@@ -54,7 +54,12 @@ export async function pair(opts) {
     timers.push(setTimeout(() => fail(new Error('timeout')), timeoutMs));
     if (peerWaitMs > 0) timers.push(setTimeout(() => { if (!peerSeen) fail(new Error('no peer')); }, peerWaitMs));
     if (signal) { if (signal.aborted) return fail(new Error('cancelled')); signal.addEventListener('abort', abort); }
-    ws.onopen = () => onStatus(role === 'guest' ? '正在等待电脑回应…' : '正在等待手机…');
+    ws.onopen = () => {
+      onStatus(role === 'guest' ? '正在等待电脑回应…' : '正在等待手机…');
+      // A long wait in a room (the PC listening for minutes) sends a small "ping" now and then so the idle socket is not
+      // dropped; the relay answers it without waking its Durable Object (setWebSocketAutoResponse), so it costs nothing.
+      if (keepAliveMs > 0) timers.push(setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, keepAliveMs));
+    };
     const authenticate = (ch) => {
       if (channel || ch.label !== 'dockdrop' || !ch.ordered) {
         ch.close();
@@ -122,4 +127,59 @@ export async function pair(opts) {
     };
   });
   return done;
+}
+
+// ---- Doorbell: one room per computer for all of its remembered phones ------------------------------------------------
+// The computer keeps one hibernated socket in its doorbell room (SHA-256("dockdrop-doorbell-v1" || doorbell secret)) instead
+// of one waiting room per remembered phone. A remembered phone that wants to connect joins its own room as usual and
+// "knocks" here with its phone id; the computer then joins that phone's room for a short while. A knock grants nothing by
+// itself: the phone is still authenticated with its own secret (pair()), and unknown ids are ignored.
+export const DOORBELL_CAPABILITY = 'doorbell-v1';
+
+export async function doorbellRoom(doorbellHex) {
+  const data = new Uint8Array([...enc.encode('dockdrop-doorbell-v1'), ...secretBytes(doorbellHex, true)]);
+  return hex(await crypto.subtle.digest('SHA-256', data)).slice(0, 32);
+}
+
+// Computer side: keeps the doorbell socket open (reconnecting with back-off) until `signal` aborts; calls onKnock(phoneId).
+export async function listenDoorbell({ signalUrl, doorbell, onKnock, signal, keepAliveMs = 45000 }) {
+  const url = signalUrl.replace(/\/$/, '') + '/room/' + await doorbellRoom(doorbell) + '?role=host';
+  let failures = 0;
+  while (!signal?.aborted) {
+    const opened = await new Promise((resolve) => {
+      let open = false, ping = 0;
+      const ws = new WebSocket(url);
+      const close = () => { try { ws.close(); } catch {} };
+      signal?.addEventListener('abort', close, { once: true });
+      ws.onopen = () => { open = true; ping = setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, keepAliveMs); };
+      ws.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (m?.t === 'knock' && typeof m.id === 'string' && /^[a-f0-9]{32}$/.test(m.id)) onKnock(m.id);
+      };
+      ws.onclose = () => { clearInterval(ping); signal?.removeEventListener('abort', close); resolve(open); };
+    });
+    if (signal?.aborted) return;
+    failures = opened ? 0 : failures + 1;  // a socket that was open closed (expiry, network): reconnect at once
+    await new Promise((r) => setTimeout(r, failures ? Math.min(30000, 1000 * 2 ** (failures - 1)) : 250));
+  }
+}
+
+// Phone side: knocks once on the computer's doorbell. Resolves true when the knock was delivered.
+export async function ringDoorbell({ signalUrl, doorbell, phoneId, timeoutMs = 5000 }) {
+  const url = signalUrl.replace(/\/$/, '') + '/room/' + await doorbellRoom(doorbell) + '?role=guest';
+  return new Promise((resolve) => {
+    let done = false;
+    const ws = new WebSocket(url);
+    const finish = (ok) => { if (done) return; done = true; clearTimeout(timer); setTimeout(() => { try { ws.close(); } catch {} }, 200); resolve(ok); };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    ws.onmessage = (e) => {
+      if (done) return;  // one knock per ring
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m?.t !== 'peer') return;  // the computer is at its doorbell
+      ws.send(JSON.stringify({ t: 'knock', id: phoneId }));
+      finish(true);
+    };
+    ws.onerror = () => finish(false);
+    ws.onclose = () => finish(false);
+  });
 }

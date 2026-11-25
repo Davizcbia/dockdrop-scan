@@ -44,7 +44,8 @@ void main() {
   float light = clamp(dot(normal, vec2(-0.30, -0.95)), 0.0, 1.0);
   color = mix(color * 0.70, vec3(0.10, 0.14, 0.21), 0.25);
   color += rim * (0.05 + 0.14 * light) + curvature * 0.035 * light;
-  gl_FragColor = vec4(color, smoothstep(-0.5, 0.9, depth));
+  float threshold = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715)))) - 0.5;
+  gl_FragColor = vec4(clamp(color + threshold / 255.0, 0.0, 1.0), smoothstep(-0.5, 0.9, depth));
 }
 `;
 

@@ -1,7 +1,7 @@
 // Optical Bubble scanner (Phase 1: does the code scan on real phones?). The camera decodes in a worker, then uses the shared pairing protocol (../pair.js). Also the QR fallback: the phone's own camera app opens
 // this page with #s=<secret>, and it pairs straight away.
 import { SIGNAL_URL as CONFIG_SIGNAL } from '../config.js';
-import { pair } from '../pair.js?v=remember1';
+import { pair, ringDoorbell, DOORBELL_CAPABILITY } from '../pair.js?v=doorbell1';
 import { startCameraGlass } from './glass.js?v=glass1';
 import { receiveTransfer, sendTransfer, validateTransfer } from './transfer.js?v=remember1';
 import { contentsLabel, locale, t, transferError } from './locale.js?v=remember1';
@@ -14,7 +14,7 @@ const TRUST_CAPABILITY = 'remember-phone-v1';
 const saveAllowed = !params.has('signal');
 const SHOW_METRICS = params.get('debug') === '1';
 const video = $('video'), focus = $('focus');
-const worker = new Worker(new URL('./worker.js?v=early1', import.meta.url), { type: 'module' });
+const worker = new Worker(new URL('./worker.js?v=pool1', import.meta.url), { type: 'module' });
 const SIZE = 400;  // decoded square (px)
 const grab = document.createElement('canvas');
 grab.width = grab.height = SIZE;
@@ -39,7 +39,30 @@ const newStats = () => ({ t0: performance.now(), firstFrame: 0, firstLock: 0, fr
 
 function validComputer(value) {
   return value && /^[a-f0-9]{32}$/.test(value.id) && /^[a-f0-9]{64}$/.test(value.secret)
-    && typeof value.name === 'string' && value.name.length > 0 && value.name.length <= 64;
+    && typeof value.name === 'string' && value.name.length > 0 && value.name.length <= 64
+    && (value.doorbell === undefined || /^[a-f0-9]{64}$/.test(value.doorbell));
+}
+// The computer's doorbell (see pair.js): it arrives on the channel ("dockdrop-doorbell:<hex>"), possibly before this phone
+// knows under which entry to keep it (a new pairing is saved a moment later). Kept here until adoptDoorbell() saves it.
+function watchDoorbell(connection) {
+  const box = { value: null, onValue: null };
+  connection.channel.addEventListener('message', ({data}) => {
+    const prefix = 'dockdrop-doorbell:';
+    if (typeof data !== 'string' || !data.startsWith(prefix) || !/^[a-f0-9]{64}$/.test(data.slice(prefix.length))) return;
+    box.value = data.slice(prefix.length);
+    box.onValue?.();
+  });
+  return box;
+}
+function adoptDoorbell(connection, box, computerId) {
+  const save = () => {
+    const entries = savedComputers();
+    const entry = entries.find((item) => item.id === computerId);
+    if (!entry || !box.value) return;
+    entry.doorbell = box.value;
+    if (saveComputers(entries) && connection.channel.readyState === 'open') connection.channel.send('dockdrop-doorbell:ok');
+  };
+  if (box.value) save(); else box.onValue = save;
 }
 function savedComputers() {
   if (!saveAllowed) return [];
@@ -175,7 +198,7 @@ function decode(gray) {
 // Accepting a reading: a Reed-Solomon codeword that needed no correction is certain (all 8 check bytes agree by
 // chance 1 in 2^64); one that was corrected must be read the same twice within 2 s.
 function accept(r) {
-  if (MODE === 'rays') return true;  // the sum of many frames, Reed-Solomon checked; the pairing's HMAC checks again
+  if (MODE === 'rays' && r.pattern !== 'rings') return true;  // the sum of many frames, Reed-Solomon checked; the pairing's HMAC checks again
   if (r.corrected === 0) return true;
   const now = performance.now();
   st.reads = st.reads.filter((x) => now - x.t < 2000);
@@ -189,14 +212,41 @@ let qrDetector = null;
 if ('BarcodeDetector' in window) {
   BarcodeDetector.getSupportedFormats().then((f) => { if (f.includes('qr_code')) qrDetector = new BarcodeDetector({ formats: ['qr_code'] }); }).catch(() => {});
 }
-let qrBusy = false, qrTick = 0;
+let qrBusy = false, qrTick = 0, qrWorker, nextSoftwareRead = 0;
+const qrCanvas = document.createElement('canvas');
+const qrContext = qrCanvas.getContext('2d', { willReadFrequently: true });
+function acceptQr(value, session) {
+  const match = /^https:\/\/davizcbia\.github\.io\/dockdrop-scan\/bubble\/#s=([0-9a-f]{16})$/i.exec(value);
+  if (!match || !scanning || session !== st) return false;
+  found({ secret: match[1].toLowerCase(), via: 'qr' });
+  return true;
+}
+function readGlassQr(session) {
+  if (performance.now() < nextSoftwareRead || !video.videoWidth || !video.videoHeight) return;
+  nextSoftwareRead = performance.now() + 700;
+  const scale = Math.min(1, 800 / Math.max(video.videoWidth, video.videoHeight));
+  qrCanvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  qrCanvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  qrContext.drawImage(video, 0, 0, qrCanvas.width, qrCanvas.height);
+  const frame = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+  qrWorker ||= new Worker(new URL('./qr-worker.js', import.meta.url));
+  qrWorker.onmessage = ({ data }) => { qrBusy = false; acceptQr(data, session); };
+  qrWorker.onerror = () => { qrBusy = false; qrWorker.terminate(); qrWorker = null; };
+  qrWorker.postMessage(frame, [frame.data.buffer]);
+  qrBusy = true;
+}
 function tryQR() {
-  if (!qrDetector || qrBusy || ++qrTick % 6) return;
+  if (qrBusy || ++qrTick % 6) return;
+  const session = st;
+  if (!qrDetector) { readGlassQr(session); return; }
   qrBusy = true;
   qrDetector.detect(video).then((codes) => {
     qrBusy = false;
-    for (const c of codes) { const m = /#s=([0-9a-f]{16})/.exec(c.rawValue || ''); if (m && scanning) { found({ secret: m[1], via: 'qr' }); return; } }
-  }).catch(() => { qrBusy = false; });
+    if (scanning && session === st && !codes.some(c => acceptQr(c.rawValue, session))) readGlassQr(session);
+  }).catch(() => {
+    qrBusy = false;
+    if (scanning && session === st) readGlassQr(session);
+  });
 }
 
 function scheduleScan() {
@@ -368,14 +418,30 @@ async function connect(r, metrics) {
   try {
     const name = /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document ? 'iPad' : t(/Android/.test(navigator.userAgent) ? 'Android 手机' : '浏览器');
     status('正在连接…', { spin: true, cancel: true });
-    const res = await pair({signalUrl: SIGNAL_URL, secret: r.secret, role: 'guest', name, remembered,
-      signal: ctl.signal, onStatus: (text) => status(text, {spin: true, cancel: true})});
+    // A computer with a doorbell no longer waits in this phone's room: knock (a few times, in case its doorbell socket is
+    // reconnecting) while waiting here, and it joins.
+    let knocking = Boolean(remembered && r.computer.doorbell && saveAllowed);
+    if (knocking) (async () => {
+      for (let i = 0; i < 4 && knocking && !ctl.signal.aborted; i++) {
+        await ringDoorbell({signalUrl: SIGNAL_URL, doorbell: r.computer.doorbell, phoneId: r.computer.id}).catch(() => false);
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+    })();
+    let res;
+    try {
+      res = await pair({signalUrl: SIGNAL_URL, secret: r.secret, role: 'guest', name, remembered,
+        capabilities: [DOORBELL_CAPABILITY],
+        signal: ctl.signal, onStatus: (text) => status(text, {spin: true, cancel: true})});
+    } finally { knocking = false; }
+    const doorbell = watchDoorbell(res);
+    if (remembered) adoptDoorbell(res, doorbell, r.computer.id);
     let trustStatus = '';
     if (!remembered && saveAllowed && res.peerCapabilities.includes(TRUST_CAPABILITY)
         && confirm(t('记住这台电脑？下次无需扫码。'))) {
       status('正在保存这台电脑…', {spin: true, cancel: true});
       const computer = await rememberComputer(res, ctl.signal);
       const saved = computer && saveComputers([computer, ...savedComputers().filter(item => item.id !== computer.id)]);
+      if (saved) adoptDoorbell(res, doorbell, computer.id);
       trustStatus = saved ? '已记住这台电脑。' : '无法记住这台电脑，本次连接仍可使用。';
     }
     if (ctl.signal.aborted) {

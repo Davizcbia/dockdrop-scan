@@ -1,13 +1,19 @@
-# DockDrop 配对扫描页
+# DockDrop 手机扫码 / DockDrop Phone Scanner
 
-DockOver 的 DockDrop 手机端扫描页。在电脑上打开 DockOver 的"添加设备"后，会出现一团蓝色光点；用手机浏览器打开本页、对准光点，就能把手机和电脑配对，之后可以互传文件、同步剪贴板。
+[简体中文](#简体中文) · [English](#english)
 
-- 识别在手机本地完成，画面不会上传。
-- 配对通过 WebRTC 在手机和电脑之间直接连接，并用光点里的一次性密钥互相验证。
-- iPhone（Safari）和安卓（Chrome）都可以用，也可以"添加到主屏幕"。
+## 简体中文
 
-源代码在 DockOver 仓库的 `dockui/web/dockdrop-scan/` 中维护，这里是发布用的副本。
+在 Windows 上打开 DockDrop，再用手机浏览器扫描配对光泡或备用二维码。配对后可以双向传输文件和文字，也可记住设备以便下次连接。
 
----
+摄像头画面在手机上处理。首次配对通过光泡或二维码中的一次性信息验证。手机端可从浏览器添加到主屏幕。
 
-Phone scanner page for DockOver's DockDrop pairing. It decodes the particle orb shown by DockOver on the phone itself, then pairs over a direct WebRTC connection authenticated by the orb's one-time secret.
+[打开扫码页](https://davizcbia.github.io/dockdrop-scan/bubble/) · [下载 Windows 版](https://github.com/Davizcbia/DockDrop/releases) · [共享源码](https://github.com/Davizcbia/DockOver/tree/main/dockui/web/dockdrop-scan)
+
+## English
+
+Open DockDrop on Windows, then use your phone browser to scan the pairing bubble or its backup QR code. Once paired, you can transfer files and text in either direction or remember the device for later reconnects.
+
+The phone processes the camera image locally. The pairing bubble or QR code provides one-time authentication for the initial pairing. You can add the scanner to your phone's home screen from the browser.
+
+[Open phone scanner](https://davizcbia.github.io/dockdrop-scan/bubble/) · [Download for Windows](https://github.com/Davizcbia/DockDrop/releases) · [Shared source](https://github.com/Davizcbia/DockOver/tree/main/dockui/web/dockdrop-scan)

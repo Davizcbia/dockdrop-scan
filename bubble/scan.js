@@ -380,6 +380,11 @@ const ERRORS = {
   'room busy': ['这个光泡正在和别的设备配对', '请等一下，或等电脑换一个新的光泡。'],
 };
 
+function vibrate(pattern) {
+  if (document.visibilityState !== 'visible' || typeof navigator.vibrate !== 'function') return;
+  navigator.vibrate(pattern);
+}
+
 async function found(r) {
   scanning = false;
   const scanT = st ? (performance.now() - (st.firstFrame || st.t0)) / 1000 : 0;
@@ -392,7 +397,7 @@ async function found(r) {
     lockT == null ? '' : t('首次定位 {time} s', {time: lockT.toFixed(2)}),
     r.corrected ? t('纠正 {count} 字节', {count: r.corrected}) : '',
   ].filter(Boolean).join(' · ') : t('识别：备用二维码（相机应用）');
-  if (navigator.vibrate) navigator.vibrate(20);
+  vibrate(20);
   hint('已识别');
   stopCamera();
   if (!SIGNAL_URL || scanOnly) {
@@ -449,6 +454,7 @@ async function connect(r, metrics) {
       return;
     }
     pairing = null; status(''); $('close').hidden = true;
+    if (!remembered) vibrate([18, 55, 18]);
     const details = metrics + '\n' + t('握手 {time} s', {time: ((performance.now() - t0) / 1000).toFixed(2)});
     if (draft.files.length || draft.text) {
       await transmit(res, details, remembered, trustStatus);
@@ -456,7 +462,6 @@ async function connect(r, metrics) {
     }
     if (receiveMode && await acceptDesktopTransfer(res, details, r.via === 'qr-app', remembered, trustStatus)) return;
     hint('已连接');
-    if (navigator.vibrate) navigator.vibrate([12, 60, 12]);
     showResult('已连接', t('已和 {device} 连接。', {device: t(res.peerName || '电脑')}) + (trustStatus ? '\n' + t(trustStatus) : ''), false, details);
     window.dockdropLink = res;
   } catch (e) {
@@ -485,6 +490,7 @@ async function transmit(connection, metrics, remembered, trustStatus) {
     $('sendText').value = '';
     draft = { files: [], text: '' };
     hint('已发送');
+    vibrate([30, 60, 30]);
     const receipt = t('电脑已接收{contents}。', {contents: contentsLabel(payload.files.length, Boolean(payload.text))});
     showResult('已发送', receipt + (trustStatus ? '\n' + t(trustStatus) : ''), false, metrics);
     window.dockdropLink = connection;
@@ -565,6 +571,7 @@ async function acceptDesktopTransfer(connection, metrics, fromQr, remembered, tr
     hint('已接收');
     showResult('已接收', t('收到{contents}。', {contents: contentsLabel(files.length, Boolean(text))}) + (trustStatus ? '\n' + t(trustStatus) : ''), false, metrics);
     showReceived(files, text);
+    vibrate([30, 60, 30]);
     window.dockdropLink = connection;
     return true;
   } catch (error) {
